@@ -1,6 +1,7 @@
 # FreshCuts Backend — Production Deployment
 
 Live at: **https://api.fc.opslin.com**
+Dashboard (Vercel): **https://dash.fc.opslin.com** — allowed in `CORS_ORIGINS` and set as `ADMIN_URL` in `app.env`.
 
 This file is the source of truth for how the backend is deployed. Keep it
 up to date — the intent is that after any backend change, the redeploy
