@@ -75,7 +75,7 @@ export default async function publicThemeRoutes(fastify) {
   fastify.get('/tabs/:key/home', {
     schema: {
       tags: ['Theme'],
-      summary: 'Get resolved home merchandising for a tab (public, no auth)',
+      summary: 'Get resolved home merchandising for a tab (public, optionally shop-scoped)',
       params: {
         type: 'object',
         required: ['key'],
@@ -103,12 +103,13 @@ export default async function publicThemeRoutes(fastify) {
         },
       },
     },
+    preHandler: [tryAttachUser],
   }, ctrl.getTabHomeContent.bind(ctrl))
 
   fastify.get('/tabs/:tabKey/sections', {
     schema: {
       tags: ['Theme'],
-      summary: 'Get section manifest for a tab (public, no auth)',
+      summary: 'Get section manifest for a tab (public, optionally shop-scoped)',
       params: {
         type: 'object',
         required: ['tabKey'],
@@ -136,6 +137,7 @@ export default async function publicThemeRoutes(fastify) {
         },
       },
     },
+    preHandler: [tryAttachUser],
   }, ctrl.getSectionManifest.bind(ctrl))
 
   fastify.post('/analytics', {

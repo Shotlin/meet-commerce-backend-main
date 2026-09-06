@@ -47,7 +47,7 @@ function normalizeSearchTerms(q) {
  * @param {number} startIdx - Next available $-placeholder index.
  * @returns {{ sql: string, nextIdx: number }}
  */
-function buildCustomerVisibilitySnippet(allocatedShopIds, params, startIdx) {
+export function buildCustomerVisibilitySnippet(allocatedShopIds, params, startIdx) {
   if (!Array.isArray(allocatedShopIds)) {
     return { sql: '', nextIdx: startIdx }
   }
@@ -100,7 +100,7 @@ function buildCustomerVisibilitySnippet(allocatedShopIds, params, startIdx) {
  * @param {number} startIdx - Next available $-placeholder index.
  * @returns {{ joinSql: string, priceExpr: string, salePriceExpr: string, stockExpr: string, nextIdx: number }}
  */
-function buildShopPriceJoin(allocatedShopIds, params, startIdx) {
+export function buildShopPriceJoin(allocatedShopIds, params, startIdx) {
   if (!Array.isArray(allocatedShopIds) || allocatedShopIds.length === 0) {
     return {
       joinSql: '',
