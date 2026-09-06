@@ -1,0 +1,452 @@
+import crypto from 'node:crypto'
+import { logger } from '../../config/logger.js'
+import { env } from '../../config/env.js'
+import { razorpay } from '../../config/razorpay.js'
+import { orderQueue } from '../../config/bullmq.js'
+import { getOffsetLimit, buildPagination } from '../../utils/paginate.js'
+import { OrdersRepository } from '../orders/orders.repository.js'
+import { PaymentSettingsService } from '../payment-settings/payment-settings.service.js'
+import { CashbackService } from '../cashback/cashback.service.js'
+import { WalletService } from '../wallet/wallet.service.js'
+import { WalletRepository } from '../wallet/wallet.repository.js'
+
+const INLINE_AUTO_ASSIGN_IN_NON_PROD =
+  process.env.AUTO_ASSIGN_INLINE === 'true' ||
+  process.env.NODE_ENV !== 'production'
+
+/**
+ * Payments service — Razorpay integration + payment management
+ */
+export class PaymentsService {
+  constructor(repository, fastify = null) {
+    this.fastify = fastify
+    this.repo = repository
+    this.ordersRepo = new OrdersRepository()
+    this.paymentSettingsService = new PaymentSettingsService()
+    this.cashbackService = new CashbackService()
+    this.walletService = new WalletService(new WalletRepository())
+  }
+
+  /**
+   * Create a Razorpay order for an existing app order
+   */
+  async createPaymentOrder(userId, orderId) {
+    if (!razorpay) {
+      return { success: false, message: 'Online payments are not configured' }
+    }
+
+    const { razorpayEnabled } = await this.paymentSettingsService.getConfig()
+    if (!razorpayEnabled) {
+      return { success: false, message: 'Online payment is currently unavailable.' }
+    }
+
+    const order = await this.ordersRepo.findByIdAndUser(orderId, userId)
+    if (!order) {
+      return { success: false, message: 'Order not found' }
+    }
+
+    if (order.paymentMethod !== 'ONLINE') {
+      return { success: false, message: 'Order is not set for online payment' }
+    }
+
+    if (order.paymentStatus === 'PAID') {
+      return { success: false, message: 'Order is already paid' }
+    }
+
+    // Check if payment record already exists
+    const existing = await this.repo.findByOrderId(orderId)
+    if (existing && existing.status === 'PAID') {
+      return { success: false, message: 'Payment already completed' }
+    }
+
+    // Create Razorpay order. The razorpay SDK throws errors carrying a
+    // `statusCode` mirrored from Razorpay's own API response (e.g. 401
+    // when our API credentials are rejected) — left uncaught, that
+    // error reaches the global error handler, which forwards
+    // `error.statusCode` verbatim (errorHandler.plugin.js). A 401 from
+    // Razorpay would then look identical to the customer's own session
+    // being invalid, sending them on a wild goose chase re-logging in
+    // for a problem that's actually on our Razorpay account config.
+    // Catching here keeps upstream provider failures mapped to this
+    // module's normal `{ success: false }` contract (→ HTTP 400).
+    let rzpOrder
+    try {
+      rzpOrder = await razorpay.orders.create({
+        amount: Math.round(order.totalAmount * 100), // paise
+        currency: 'INR',
+        receipt: order.orderNumber,
+        notes: {
+          orderId: order.id,
+          userId,
+        },
+      })
+    } catch (err) {
+      logger.error(
+        { err: err.error || err.message, statusCode: err.statusCode, orderId },
+        'Razorpay order creation failed'
+      )
+      return { success: false, message: 'Unable to start online payment right now. Please try again shortly.' }
+    }
+
+    // Payment expires in 15 minutes — after this the cleanup worker will
+    // cancel the order and release any reserved stock.
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
+
+    // Save payment record
+    const payment = await this.repo.create({
+      orderId: order.id,
+      userId,
+      razorpayOrderId: rzpOrder.id,
+      amount: order.totalAmount,
+      currency: 'INR',
+      status: 'PENDING',
+      expiresAt,
+      metadata: { receipt: order.orderNumber },
+    })
+
+    // Update the order with payment expiry so the cleanup worker can find it
+    await this.ordersRepo.updateStatus(order.id, undefined, {
+      paymentExpiresAt: expiresAt,
+    })
+
+    logger.info(
+      { paymentId: payment.id, razorpayOrderId: rzpOrder.id, orderId },
+      'Razorpay payment order created'
+    )
+
+    return {
+      success: true,
+      data: {
+        paymentId: payment.id,
+        razorpayOrderId: rzpOrder.id,
+        amount: order.totalAmount,
+        currency: 'INR',
+        keyId: env.RAZORPAY_KEY_ID,
+      },
+    }
+  }
+
+  /**
+   * Verify payment signature from Razorpay client-side callback
+   */
+  async verifyPayment(userId, { razorpayOrderId, razorpayPaymentId, razorpaySignature }) {
+    const payment = await this.repo.findByRazorpayOrderId(razorpayOrderId)
+    if (!payment) {
+      return { success: false, message: 'Payment record not found' }
+    }
+
+    if (payment.userId !== userId) {
+      return { success: false, message: 'Unauthorized' }
+    }
+
+    // HMAC-SHA256 verification
+    const expectedSignature = crypto
+      .createHmac('sha256', env.RAZORPAY_KEY_SECRET)
+      .update(`${razorpayOrderId}|${razorpayPaymentId}`)
+      .digest('hex')
+
+    if (expectedSignature !== razorpaySignature) {
+      logger.warn({ razorpayOrderId }, 'Payment signature verification failed')
+
+      await this.repo.updatePayment(payment.id, { status: 'FAILED' })
+      await this.ordersRepo.updateStatus(payment.orderId, undefined, {
+        paymentStatus: 'FAILED',
+      })
+
+      return { success: false, message: 'Payment verification failed' }
+    }
+
+    // Update payment record
+    const updated = await this.repo.updatePayment(payment.id, {
+      razorpayPaymentId,
+      razorpaySignature,
+      status: 'PAID',
+    })
+
+    // Update order payment status
+    await this.ordersRepo.updateStatus(payment.orderId, 'CONFIRMED', {
+      paymentStatus: 'PAID',
+    })
+    await this._queueAutoAssign(payment.orderId, 'PAYMENT_VERIFY')
+
+    // Credit any cashback whose trigger is PAYMENT_SUCCESS or
+    // ORDER_CONFIRMED — this call also confirms the order, so both
+    // triggers are satisfied at the same moment. Fire-and-forget.
+    this.cashbackService.evaluateAndCredit(payment.orderId, 'PAYMENT_SUCCESS').catch((err) => {
+      logger.warn({ err: err.message, orderId: payment.orderId }, 'Cashback evaluation failed (payment verify)')
+    })
+    this.cashbackService.evaluateAndCredit(payment.orderId, 'ORDER_CONFIRMED').catch((err) => {
+      logger.warn({ err: err.message, orderId: payment.orderId }, 'Cashback evaluation failed (payment verify)')
+    })
+
+    // NOW clear the cart and send "Order placed" notification — only after
+    // payment is confirmed. This is the critical fix: previously the order
+    // service cleared cart and sent notification at order creation time,
+    // before payment verification, which caused false notifications and
+    // empty carts when Razorpay payment failed.
+    try {
+      const { CartRepository } = await import('../cart/cart.repository.js')
+      const cartRepo = new CartRepository()
+      await cartRepo.clearCart(userId)
+      await cartRepo.clearExtras(userId)
+    } catch (err) {
+      logger.warn({ err: err.message, userId }, 'Cart clear after payment verify failed (non-critical)')
+    }
+
+    // Same "only after payment is confirmed" reasoning as the cart clear
+    // above — a coupon's usage must not count against the customer's limit
+    // until the order it was used on is actually confirmed.
+    try {
+      const { CouponsService } = await import('../coupons/coupons.service.js')
+      const { CouponsRepository } = await import('../coupons/coupons.repository.js')
+      await new CouponsService(new CouponsRepository()).recordUsageForOrder(payment.orderId)
+    } catch (err) {
+      logger.warn({ err: err.message, orderId: payment.orderId }, 'Coupon usage recording after payment verify failed (non-critical)')
+    }
+
+    // Send order placed notification after confirmed payment
+    try {
+      const order = await this.ordersRepo.findByIdAndUser(payment.orderId, userId)
+      if (order) {
+        const { NotificationsRepository } = await import('../notifications/notifications.repository.js')
+        const { NotificationsService } = await import('../notifications/notifications.service.js')
+        const { buildCustomerOrderEventNotification } = await import('../notifications/customer-order-event.helper.js')
+        const notifService = new NotificationsService(new NotificationsRepository(), null)
+        await notifService.sendNotification(userId, buildCustomerOrderEventNotification({
+          orderId: order.id,
+          orderNumber: order.orderNumber || order.order_number,
+          timelineType: 'ORDER_PLACED',
+          status: 'CONFIRMED',
+        }))
+
+        this.fastify?.emitDashboardNewOrder?.({
+          id: order.id,
+          order_number: order.orderNumber,
+          total: order.totalAmount,
+          payment_method: 'ONLINE',
+          delivery_mode: order.deliveryMode,
+          created_at: order.createdAt,
+        })
+      }
+    } catch (err) {
+      logger.warn({ err: err.message, orderId: payment.orderId }, 'Order notification after payment verify failed (non-critical)')
+    }
+
+    logger.info(
+      { paymentId: payment.id, razorpayPaymentId, orderId: payment.orderId },
+      'Payment verified successfully'
+    )
+
+    return { success: true, payment: updated }
+  }
+
+  /**
+   * Handle Razorpay webhook events
+   */
+  async handleWebhook(body, signature) {
+    if (!env.RAZORPAY_WEBHOOK_SECRET) {
+      logger.warn('Razorpay webhook secret not configured')
+      return { success: false }
+    }
+
+    // Verify webhook signature
+    const expectedSignature = crypto
+      .createHmac('sha256', env.RAZORPAY_WEBHOOK_SECRET)
+      .update(JSON.stringify(body))
+      .digest('hex')
+
+    if (expectedSignature !== signature) {
+      logger.warn('Webhook signature mismatch')
+      return { success: false }
+    }
+
+    const event = body.event
+    const payload = body.payload
+
+    logger.info({ event }, 'Razorpay webhook received')
+
+    switch (event) {
+      case 'payment.captured': {
+        const rzpPaymentId = payload.payment?.entity?.id
+        const rzpOrderId = payload.payment?.entity?.order_id
+
+        if (rzpOrderId) {
+          const payment = await this.repo.findByRazorpayOrderId(rzpOrderId)
+          if (payment && payment.status !== 'PAID') {
+            await this.repo.updatePayment(payment.id, {
+              razorpayPaymentId: rzpPaymentId,
+              status: 'PAID',
+              method: payload.payment?.entity?.method,
+            })
+            await this.ordersRepo.updateStatus(payment.orderId, 'CONFIRMED', {
+              paymentStatus: 'PAID',
+            })
+            await this._queueAutoAssign(payment.orderId, 'PAYMENT_WEBHOOK')
+            this.cashbackService.evaluateAndCredit(payment.orderId, 'PAYMENT_SUCCESS').catch((err) => {
+              logger.warn({ err: err.message, orderId: payment.orderId }, 'Cashback evaluation failed (webhook)')
+            })
+            this.cashbackService.evaluateAndCredit(payment.orderId, 'ORDER_CONFIRMED').catch((err) => {
+              logger.warn({ err: err.message, orderId: payment.orderId }, 'Cashback evaluation failed (webhook)')
+            })
+            // Same reasoning as verifyPayment() — this webhook is the
+            // fallback confirmation path when the client's own verify call
+            // never landed, so it needs the same coupon-usage recording.
+            // The unique index on coupon_usages(coupon_id, user_id,
+            // order_id) plus recordUsage()'s 23505 handling makes this
+            // safe to run even if verifyPayment() already recorded it.
+            import('../coupons/coupons.service.js').then(async ({ CouponsService }) => {
+              const { CouponsRepository } = await import('../coupons/coupons.repository.js')
+              return new CouponsService(new CouponsRepository()).recordUsageForOrder(payment.orderId)
+            }).catch((err) => {
+              logger.warn({ err: err.message, orderId: payment.orderId }, 'Coupon usage recording failed (webhook)')
+            })
+            logger.info({ paymentId: payment.id }, 'Payment captured via webhook')
+          } else if (!payment) {
+            // Not a checkout order payment — check whether it's a wallet
+            // top-up instead (a completely separate Razorpay order created
+            // directly by WalletService, not the orders/payments module).
+            this.walletService.completeVerifiedTopUp(rzpOrderId).catch((err) => {
+              logger.warn({ err: err.message, rzpOrderId }, 'Wallet top-up webhook completion failed')
+            })
+          }
+        }
+        break
+      }
+
+      case 'payment.failed': {
+        const rzpOrderId = payload.payment?.entity?.order_id
+        if (rzpOrderId) {
+          const payment = await this.repo.findByRazorpayOrderId(rzpOrderId)
+          if (payment) {
+            await this.repo.updatePayment(payment.id, { status: 'FAILED' })
+            await this.ordersRepo.updateStatus(payment.orderId, undefined, {
+              paymentStatus: 'FAILED',
+            })
+            logger.info({ paymentId: payment.id }, 'Payment failed via webhook')
+          }
+        }
+        break
+      }
+
+      case 'refund.processed': {
+        const rzpPaymentId = payload.refund?.entity?.payment_id
+        // Handle refund event if needed
+        logger.info({ razorpayPaymentId: rzpPaymentId }, 'Refund processed via webhook')
+        break
+      }
+
+      default:
+        logger.debug({ event }, 'Unhandled webhook event')
+    }
+
+    return { success: true }
+  }
+
+  /**
+   * Get payment history for a user
+   */
+  async getHistory(userId, filters) {
+    const { offset, limit } = getOffsetLimit(filters)
+    const page = Math.max(1, Math.floor(filters.page || 1))
+
+    const { payments, total } = await this.repo.findByUser(userId, { limit, offset })
+
+    return {
+      payments,
+      pagination: buildPagination({ page, limit, total }),
+    }
+  }
+
+  /**
+   * Admin: initiate refund
+   */
+  async refund(paymentId, { amount, reason }) {
+    if (!razorpay) {
+      return { success: false, message: 'Online payments are not configured' }
+    }
+
+    const payment = await this.repo.findById(paymentId)
+    if (!payment) {
+      return { success: false, message: 'Payment not found' }
+    }
+
+    if (payment.status !== 'PAID') {
+      return { success: false, message: 'Only paid payments can be refunded' }
+    }
+
+    if (!payment.razorpayPaymentId) {
+      return { success: false, message: 'No Razorpay payment ID — cannot refund' }
+    }
+
+    const refundAmount = amount || payment.amount
+    if (refundAmount > payment.amount) {
+      return { success: false, message: 'Refund amount exceeds payment amount' }
+    }
+
+    try {
+      const rzpRefund = await razorpay.payments.refund(payment.razorpayPaymentId, {
+        amount: Math.round(refundAmount * 100),
+        notes: { reason: reason || 'Admin initiated refund' },
+      })
+
+      const updated = await this.repo.updateRefund(payment.id, {
+        refundId: rzpRefund.id,
+        refundAmount,
+        refundStatus: 'PROCESSED',
+      })
+
+      // Update order status to refunded
+      await this.ordersRepo.updateStatus(payment.orderId, 'REFUNDED', {
+        paymentStatus: 'REFUNDED',
+      })
+
+      logger.info({ paymentId, refundId: rzpRefund.id, refundAmount }, 'Refund initiated')
+      return { success: true, payment: updated }
+    } catch (err) {
+      logger.error({ err, paymentId }, 'Refund failed')
+      return { success: false, message: 'Refund failed: ' + err.message }
+    }
+  }
+
+  async _queueAutoAssign(orderId, source = 'PAYMENTS_SERVICE') {
+    try {
+      await orderQueue.add(
+        'auto-assign',
+        {
+          type: 'auto-assign',
+          orderId,
+          source,
+        },
+        {
+          jobId: `auto-assign-${orderId}`,
+          removeOnComplete: true,
+        }
+      )
+      if (INLINE_AUTO_ASSIGN_IN_NON_PROD) {
+        await this._runAutoAssignFallback(orderId, `${source}_DEV_INLINE`)
+      }
+    } catch (err) {
+      logger.warn({ err, orderId, source }, 'Failed to queue auto-assign job')
+      await this._runAutoAssignFallback(orderId, source)
+    }
+  }
+
+  async _runAutoAssignFallback(orderId, source) {
+    try {
+      const { processOrderJob } = await import('../../workers/processors.js')
+      await processOrderJob({
+        data: {
+          type: 'auto-assign',
+          orderId,
+          source: `${source}_INLINE_FALLBACK`,
+        },
+      })
+      logger.info({ orderId, source }, 'Inline auto-assign fallback executed')
+    } catch (fallbackErr) {
+      logger.error(
+        { err: fallbackErr, orderId, source },
+        'Inline auto-assign fallback failed'
+      )
+    }
+  }
+}
