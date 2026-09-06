@@ -15,6 +15,9 @@ export const createThemeSchema = {
     properties: {
       name: { type: 'string', minLength: 1, maxLength: 100 },
       theme_data: { type: 'object' },
+      // Which physical shop this theme belongs to — omitted/null means the
+      // platform-default theme (Requirement: per-store branding).
+      shop_id: { type: ['string', 'null'], format: 'uuid' },
       tab_id: { type: 'string', format: 'uuid' },
       tab_key: { type: 'string', maxLength: 50 },
       tab_label: { type: 'string', maxLength: 100 },
@@ -40,6 +43,7 @@ export const updateThemeSchema = {
     properties: {
       name: { type: 'string', maxLength: 100 },
       theme_data: { type: 'object' },
+      shop_id: { type: ['string', 'null'], format: 'uuid' },
       tab_id: { type: ['string', 'null'], format: 'uuid' },
       tab_key: { type: 'string', maxLength: 50 },
       tab_label: { type: 'string', maxLength: 100 },

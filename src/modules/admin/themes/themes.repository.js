@@ -9,9 +9,11 @@ const THEME_SELECT = `
   SELECT
     theme.*,
     tab.store_key,
-    tab.status AS tab_status
+    tab.status AS tab_status,
+    shop.name AS shop_name
   FROM app_themes theme
   LEFT JOIN theme_tabs tab ON tab.id = theme.tab_id
+  LEFT JOIN shops shop ON shop.id = theme.shop_id
 `
 
 export class ThemesRepository {
@@ -32,11 +34,14 @@ export class ThemesRepository {
     return theme || null
   }
 
-  async findActive() {
+  async findActive(shopId = null) {
     const { rows: [theme] } = await query(
       `${THEME_SELECT}
        WHERE theme.is_active = true
-       LIMIT 1`
+         AND (theme.shop_id = $1 OR theme.shop_id IS NULL)
+       ORDER BY (theme.shop_id = $1) DESC NULLS LAST
+       LIMIT 1`,
+      [shopId]
     )
     return theme || null
   }
@@ -95,6 +100,7 @@ export class ThemesRepository {
       `INSERT INTO app_themes (
          name,
          theme_data,
+         shop_id,
          tab_id,
          tab_key,
          tab_label,
@@ -105,11 +111,12 @@ export class ThemesRepository {
          ab_split_percent,
          etag
        )
-       VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING id`,
       [
         data.name,
         JSON.stringify(data.theme_data),
+        data.shop_id || null,
         data.tab_id || null,
         tabMeta?.key ?? data.tab_key ?? null,
         tabMeta?.label ?? data.tab_label ?? null,
@@ -199,6 +206,11 @@ export class ThemesRepository {
       params.push(tabMeta?.sort_order ?? 0)
     }
 
+    if (data.shop_id !== undefined) {
+      sets.push(`shop_id = $${idx++}`)
+      params.push(data.shop_id || null)
+    }
+
     for (const col of ['tab_key', 'tab_label', 'tab_icon_url', 'status', 'ab_variant']) {
       if (data[col] !== undefined) {
         sets.push(`${col} = $${idx++}`)
@@ -272,8 +284,15 @@ export class ThemesRepository {
         existing.store_key === 'zepto'
 
       if (shouldUpdateActiveFlag) {
+        // Scoped to the same shop bucket (NULL-safe) so activating one
+        // shop's theme never deactivates another shop's — or the platform
+        // default's — active theme.
         await client.query(
-          'UPDATE app_themes SET is_active = false, updated_at = NOW() WHERE is_active = true'
+          `UPDATE app_themes
+              SET is_active = false, updated_at = NOW()
+            WHERE is_active = true
+              AND shop_id IS NOT DISTINCT FROM $1`,
+          [existing.shop_id ?? null]
         )
       }
 

@@ -3,11 +3,30 @@ import { PublicThemeController } from './public.controller.js'
 const ctrl = new PublicThemeController()
 
 export default async function publicThemeRoutes(fastify) {
-  // NO auth hook — this is a public endpoint
+  // Best-effort JWT verification, same pattern as products.routes.js: if a
+  // token is present and valid it lands on request.user (so the controller
+  // can resolve the customer's shop for per-store theming); otherwise the
+  // request proceeds anonymously — this stays a genuinely public endpoint.
+  const tryAttachUser = async (request) => {
+    if (typeof fastify.optionalAuth === 'function') {
+      try {
+        await fastify.optionalAuth(request)
+      } catch {
+        /* anonymous fallback */
+      }
+      return
+    }
+    try {
+      await request.jwtVerify()
+    } catch {
+      /* anonymous fallback */
+    }
+  }
+
   fastify.get('/active', {
     schema: {
       tags: ['Theme'],
-      summary: 'Get active theme for the app (public, no auth)',
+      summary: 'Get active theme for the app (public, optionally shop-scoped)',
       response: {
         200: {
           type: 'object',
@@ -24,6 +43,7 @@ export default async function publicThemeRoutes(fastify) {
         },
       },
     },
+    preHandler: [tryAttachUser],
   }, ctrl.getActiveTheme.bind(ctrl))
 
   fastify.get('/tabs', {

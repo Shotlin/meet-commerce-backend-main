@@ -6,7 +6,8 @@ import { getSocketIo } from '../../../plugins/socketio.plugin.js'
 import { logger } from '../../../config/logger.js'
 import { cacheDeletePattern } from '../../../utils/cache.js'
 import {
-  ACTIVE_THEME_CACHE_KEY,
+  ACTIVE_THEME_CACHE_PREFIX,
+  getActiveThemeCacheKey,
   LEGACY_TAB_CACHE_KEY,
   getAdminTabThemesCacheKey,
 } from '../../themes/theme-cache.js'
@@ -15,7 +16,9 @@ const repo = new ThemesRepository()
 const CACHE_TTL = 300
 
 async function invalidateThemeCaches() {
-  await redis.del(ACTIVE_THEME_CACHE_KEY)
+  // Every shop bucket, not just one key — a theme edit/activation can
+  // affect the global default and/or any shop's active theme.
+  await cacheDeletePattern(`${ACTIVE_THEME_CACHE_PREFIX}:*`)
   await redis.del(LEGACY_TAB_CACHE_KEY)
   await redis.del(getAdminTabThemesCacheKey())
   await cacheDeletePattern('bakaloo:admin_theme_tabs:*')
@@ -49,13 +52,14 @@ export class ThemesService {
     return repo.findById(id)
   }
 
-  async getActive() {
-    const cached = await redis.get(ACTIVE_THEME_CACHE_KEY)
+  async getActive(shopId = null) {
+    const cacheKey = getActiveThemeCacheKey(shopId)
+    const cached = await redis.get(cacheKey)
     if (cached) return JSON.parse(cached)
 
-    const theme = await repo.findActive()
+    const theme = await repo.findActive(shopId)
     if (theme) {
-      await redis.set(ACTIVE_THEME_CACHE_KEY, JSON.stringify(theme.theme_data), 'EX', CACHE_TTL)
+      await redis.set(cacheKey, JSON.stringify(theme.theme_data), 'EX', CACHE_TTL)
     }
     return theme?.theme_data ?? null
   }

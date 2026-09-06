@@ -4,13 +4,15 @@ import { redis } from '../../config/redis.js'
 import { success, error } from '../../utils/apiResponse.js'
 import { logger } from '../../config/logger.js'
 import {
-  ACTIVE_THEME_CACHE_KEY,
+  getActiveThemeCacheKey,
   getSectionPublicCacheKey,
   getTabHomeCacheKey,
   getTabManifestCacheKey,
 } from './theme-cache.js'
 import { STORE_KEYS } from '../theme-tabs/theme-tabs.shared.js'
 import { FeeSettingsService } from '../fee-settings/fee-settings.service.js'
+import { AllocationService } from '../allocation/allocation.service.js'
+import { AllocationRepository } from '../allocation/allocation.repository.js'
 
 const CACHE_TTL = 300
 
@@ -46,22 +48,55 @@ const HOME_MANIFEST_SECTION_CAP = 12
 export class PublicThemeController {
   constructor() {
     this.feeSettingsService = new FeeSettingsService()
+    this.allocationService = new AllocationService(new AllocationRepository())
+  }
+
+  /**
+   * Resolve which physical shop's theme this request should see — the
+   * customer's primary allocated shop when authenticated and allocated,
+   * else null (the platform-default theme). Mirrors how product visibility
+   * is already resolved from `user_shop_allocations` elsewhere.
+   */
+  async _resolveShopId(request) {
+    const userId = request.user?.id
+    if (!userId) return null
+    try {
+      const { shops } = await this.allocationService.getForUser(userId)
+      const primary = shops?.find((s) => s.is_primary) ?? shops?.[0] ?? null
+      return primary?.shop_id ?? null
+    } catch (err) {
+      logger.error({ err, userId }, 'Failed to resolve shop for theme lookup')
+      return null
+    }
   }
 
   async getActiveTheme(request, reply) {
-    const cached = await redis.get(ACTIVE_THEME_CACHE_KEY)
+    const shopId = await this._resolveShopId(request)
+    const cacheKey = getActiveThemeCacheKey(shopId)
+
+    const cached = await redis.get(cacheKey)
     if (cached) {
       return success(JSON.parse(cached), 'Active theme')
     }
 
+    // A shop-specific active theme wins when one exists; otherwise fall
+    // back to the platform default (shop_id IS NULL) so a store that never
+    // got its own theme still renders normally. Ordered explicitly (rather
+    // than relying on UNION ALL row order) so the shop-specific row always
+    // wins when both exist.
     const { rows } = await query(
-      'SELECT theme_data FROM app_themes WHERE is_active = true LIMIT 1'
+      `SELECT theme_data, (shop_id = $1) AS is_shop_specific
+         FROM app_themes
+        WHERE is_active = true AND (shop_id = $1 OR shop_id IS NULL)
+        ORDER BY is_shop_specific DESC NULLS LAST
+        LIMIT 1`,
+      [shopId]
     )
 
     const themeData = rows[0]?.theme_data ?? null
 
     if (themeData) {
-      await redis.set(ACTIVE_THEME_CACHE_KEY, JSON.stringify(themeData), 'EX', CACHE_TTL)
+      await redis.set(cacheKey, JSON.stringify(themeData), 'EX', CACHE_TTL)
     }
 
     return success(themeData, 'Active theme')

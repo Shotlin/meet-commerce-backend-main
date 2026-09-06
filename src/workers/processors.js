@@ -6,7 +6,7 @@ import { redis } from '../config/redis.js'
 import { orderQueue } from '../config/bullmq.js'
 import { getSocketEmitter } from '../plugins/socket-emitter.js'
 import { cacheDeletePattern } from '../utils/cache.js'
-import { ACTIVE_THEME_CACHE_KEY, LEGACY_TAB_CACHE_KEY } from '../modules/themes/theme-cache.js'
+import { ACTIVE_THEME_CACHE_PREFIX, LEGACY_TAB_CACHE_KEY } from '../modules/themes/theme-cache.js'
 import { emit as emitAudit } from '../utils/audit-log.js'
 
 const DEFAULT_RIDER_EARNING = 25
@@ -157,7 +157,7 @@ async function handleScheduledActivation({ themeId }) {
     await client.query('BEGIN')
 
     const { rows: [theme] } = await client.query(
-      `SELECT theme.id, theme.tab_id, theme.tab_key, theme.ab_variant, tab.store_key
+      `SELECT theme.id, theme.tab_id, theme.tab_key, theme.ab_variant, theme.shop_id, tab.store_key
        FROM app_themes theme
        LEFT JOIN theme_tabs tab ON tab.id = theme.tab_id
        WHERE theme.id = $1`,
@@ -188,8 +188,13 @@ async function handleScheduledActivation({ themeId }) {
       theme.store_key === 'zepto'
 
     if (shouldUpdateActiveFlag) {
+      // Scoped to the same shop bucket (NULL-safe) — see themes.repository.js#activate.
       await client.query(
-        'UPDATE app_themes SET is_active = false, updated_at = NOW() WHERE is_active = true'
+        `UPDATE app_themes
+            SET is_active = false, updated_at = NOW()
+          WHERE is_active = true
+            AND shop_id IS NOT DISTINCT FROM $1`,
+        [theme.shop_id ?? null]
       )
     }
 
@@ -205,7 +210,7 @@ async function handleScheduledActivation({ themeId }) {
 
     await client.query('COMMIT')
 
-    await redis.del(ACTIVE_THEME_CACHE_KEY)
+    await cacheDeletePattern(`${ACTIVE_THEME_CACHE_PREFIX}:*`)
     await redis.del(LEGACY_TAB_CACHE_KEY)
     await cacheDeletePattern('bakaloo:tab_manifest:*')
     await cacheDeletePattern('bakaloo:tab_home:*')
