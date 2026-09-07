@@ -111,6 +111,31 @@ export class OlaMapsService {
     return style
   }
 
+  /**
+   * A key-embedded URL for Ola's static (raster) map image API — used as a
+   * fallback for the mobile address picker, whose interactive MapLibreMap
+   * renders a solid black surface on some Android devices/OS versions (a
+   * confirmed upstream maplibre-native rendering bug, not fixable from this
+   * codebase — see maplibre/maplibre-native#4079). A plain image has no
+   * such native platform-view rendering path to fail on.
+   *
+   * Same trust model as buildProxiedStyle: the returned URL carries the key
+   * and is fetched directly by the device (an Image widget), not proxied
+   * through us — rotate the key from the dashboard if it's ever abused.
+   */
+  async getStaticMapUrl(lat, lng, { zoom = 16, width = 600, height = 400, marker = true } = {}) {
+    const apiKey = await this._getApiKey()
+    if (!apiKey) {
+      return null
+    }
+
+    const path =
+      `${BASE_URL}/tiles/vector/v1/styles/${DEFAULT_STYLE_NAME}/static/` +
+      `${lng},${lat},${zoom}/${width}x${height}.png`
+    const url = marker ? `${path}?marker=${lng},${lat}|red` : path
+    return this._withApiKey(url, apiKey)
+  }
+
   async geocode(address) {
     const apiKey = await this._getApiKey()
     if (!apiKey) {

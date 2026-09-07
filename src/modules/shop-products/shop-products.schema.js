@@ -26,6 +26,7 @@ export const createShopProductSchema = z
     price: z.number().min(PRICE_MIN).max(PRICE_MAX).optional().nullable(),
     sale_price: z.number().min(PRICE_MIN).max(PRICE_MAX).optional().nullable(),
     cost_price: z.number().min(COST_PRICE_MIN).max(PRICE_MAX).optional().nullable(),
+    wholesale_price: z.number().min(PRICE_MIN).max(PRICE_MAX).optional().nullable(),
     stock_quantity: z.number().int().min(STOCK_MIN).max(STOCK_MAX).default(0),
     low_stock_threshold: z.number().int().min(LOW_STOCK_MIN).default(5),
     max_order_qty: z
@@ -62,6 +63,7 @@ export const updateShopProductSchema = z
     price: z.number().min(PRICE_MIN).max(PRICE_MAX).optional().nullable(),
     sale_price: z.number().min(PRICE_MIN).max(PRICE_MAX).optional().nullable(),
     cost_price: z.number().min(COST_PRICE_MIN).max(PRICE_MAX).optional().nullable(),
+    wholesale_price: z.number().min(PRICE_MIN).max(PRICE_MAX).optional().nullable(),
     low_stock_threshold: z.number().int().min(LOW_STOCK_MIN).optional(),
     max_order_qty: z
       .number()
@@ -77,6 +79,7 @@ export const updateShopProductSchema = z
       data.price !== undefined ||
       data.sale_price !== undefined ||
       data.cost_price !== undefined ||
+      data.wholesale_price !== undefined ||
       data.low_stock_threshold !== undefined ||
       data.max_order_qty !== undefined ||
       data.is_available !== undefined ||
@@ -251,6 +254,7 @@ export const manualCreateProductSchema = z
     price: z.number().min(PRICE_MIN).max(PRICE_MAX),
     sale_price: z.number().min(PRICE_MIN).max(PRICE_MAX).optional().nullable(),
     cost_price: z.number().min(COST_PRICE_MIN).max(PRICE_MAX).optional().nullable(),
+    wholesale_price: z.number().min(PRICE_MIN).max(PRICE_MAX).optional().nullable(),
     stock_quantity: z.number().int().min(STOCK_MIN).max(STOCK_MAX).default(0),
     low_stock_threshold: z.number().int().min(LOW_STOCK_MIN).default(5),
     max_order_qty: z

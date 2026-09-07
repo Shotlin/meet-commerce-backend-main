@@ -256,3 +256,20 @@ describe('ProductsRepository.findFamilyOptions — overwrites price, never leave
     expect(byId['product-500g']).not.toHaveProperty('sp_stock_quantity')
   })
 })
+
+describe('B2B pricing', () => {
+  it('resolves shop wholesale prices for lists, details, search and featured products', async () => {
+    const repo = new ProductsRepository()
+    await repo.findMany({ allocatedShopIds: [SHOP_A], priceMode: 'wholesale' })
+    await repo.findById('product-1', [SHOP_A], 'wholesale')
+    await repo.fullTextSearch('peda', { allocatedShopIds: [SHOP_A], priceMode: 'wholesale' })
+    await repo.findFeatured(20, [SHOP_A], 'wholesale')
+    const dataQueries = queryMock.mock.calls.filter(([sql]) => sql.includes(' AS price'))
+    expect(dataQueries.length).toBeGreaterThanOrEqual(4)
+    for (const [sql, params] of dataQueries) {
+      expect(sql).toContain('COALESCE(shop_price.sp_wholesale_price, p.wholesale_price, shop_price.sp_price, p.price) AS price')
+      expect(sql).toContain('NULL AS sale_price')
+      expect(params.length).toBe(maxPlaceholder(sql))
+    }
+  })
+})

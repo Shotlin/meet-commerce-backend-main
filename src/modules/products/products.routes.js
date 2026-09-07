@@ -90,6 +90,7 @@ export default async function productRoutes(fastify) {
         type: 'object',
         properties: {
           limit: { type: 'integer', minimum: 1, maximum: 20, default: 10 },
+          priceMode: { type: 'string', enum: ['retail', 'wholesale'], default: 'retail' },
         },
       },
     },
@@ -105,6 +106,7 @@ export default async function productRoutes(fastify) {
         type: 'object',
         properties: {
           limit: { type: 'integer', minimum: 1, maximum: 20, default: 10 },
+          priceMode: { type: 'string', enum: ['retail', 'wholesale'], default: 'retail' },
         },
       },
     },

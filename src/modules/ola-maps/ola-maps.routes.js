@@ -3,6 +3,7 @@ import { OlaMapsService } from './ola-maps.service.js'
 import {
   styleUrlSchema,
   styleJsonSchema,
+  staticMapUrlSchema,
   geocodeSchema,
   reverseGeocodeSchema,
   directionsSchema,
@@ -33,6 +34,12 @@ export default async function olaMapsRoutes(fastify) {
   fastify.get('/style.json', {
     schema: styleJsonSchema,
   }, controller.styleJson.bind(controller))
+
+  // GET /static-map-url — key-embedded static image URL fallback [AUTH]
+  fastify.get('/static-map-url', {
+    schema: staticMapUrlSchema,
+    preHandler: [fastify.authenticate],
+  }, controller.getStaticMapUrl.bind(controller))
 
   // GET /geocode — forward geocode (address -> coordinates) [AUTH]
   fastify.get('/geocode', {

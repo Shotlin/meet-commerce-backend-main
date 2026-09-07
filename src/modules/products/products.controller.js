@@ -39,7 +39,8 @@ export class ProductsController {
   /** GET / — List products */
   async list(request, reply) {
     const customerContext = resolveCustomerContext(request)
-    const result = await this.service.list(request.query, customerContext)
+    const priceMode = request.query.priceMode === 'wholesale' ? 'wholesale' : 'retail'
+    const result = await this.service.list({ ...request.query, priceMode }, customerContext)
     return reply.code(200).send(
       success(result.data, 'Products fetched', { pagination: result.pagination })
     )
@@ -61,7 +62,7 @@ export class ProductsController {
   /** GET /featured — Featured products */
   async featured(request, reply) {
     const customerContext = resolveCustomerContext(request)
-    const products = await this.service.getFeatured(customerContext)
+    const products = await this.service.getFeatured(customerContext, request.query.priceMode === 'wholesale' ? 'wholesale' : 'retail')
     return reply.code(200).send(success(products, 'Featured products'))
   }
 
@@ -69,7 +70,7 @@ export class ProductsController {
   async getPriceDrops(request, reply) {
     const limit = Math.min(parseInt(request.query.limit, 10) || 10, 20)
     const customerContext = resolveCustomerContext(request)
-    const products = await this.service.getPriceDrops(limit, customerContext)
+    const products = await this.service.getPriceDrops(limit, customerContext, request.query.priceMode === 'wholesale' ? 'wholesale' : 'retail')
     return reply.code(200).send(success(products, 'Price drop products fetched'))
   }
 
@@ -77,17 +78,19 @@ export class ProductsController {
   async getLastMinute(request, reply) {
     const limit = Math.min(parseInt(request.query.limit, 10) || 10, 20)
     const customerContext = resolveCustomerContext(request)
-    const products = await this.service.getLastMinute(limit, customerContext)
+    const products = await this.service.getLastMinute(limit, customerContext, request.query.priceMode === 'wholesale' ? 'wholesale' : 'retail')
     return reply.code(200).send(success(products, 'Last-minute products fetched'))
   }
 
   /** GET /:id — Single product */
   async getOne(request, reply) {
     const customerContext = resolveCustomerContext(request)
+    const priceMode = request.query.priceMode === 'wholesale' ? 'wholesale' : 'retail'
     const product = await this.service.getByIdOrSlug(
       request.params.id,
       customerContext,
-      request.user?.id || null
+      request.user?.id || null,
+      priceMode
     )
     if (!product) {
       return reply.code(404).send(error('Product not found', 'NOT_FOUND'))

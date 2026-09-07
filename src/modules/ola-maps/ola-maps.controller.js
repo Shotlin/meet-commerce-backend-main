@@ -30,6 +30,13 @@ export class OlaMapsController {
     return reply.code(200).send(style)
   }
 
+  /** GET /static-map-url [AUTH] */
+  async getStaticMapUrl(request, reply) {
+    const { lat, lng, zoom, width, height, marker } = request.query
+    const url = await this.service.getStaticMapUrl(lat, lng, { zoom, width, height, marker })
+    return reply.code(200).send(success({ configured: url !== null, url }))
+  }
+
   /** GET /geocode */
   async geocode(request, reply) {
     const configured = await this.service.isConfigured()

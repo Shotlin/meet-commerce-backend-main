@@ -18,6 +18,7 @@ export const listProductsSchema = {
       maxPrice: { type: 'number', minimum: 0 },
       inStock: { type: 'boolean' },
       groupOptions: { type: 'boolean', default: false },
+      priceMode: { type: 'string', enum: ['retail', 'wholesale'], default: 'retail' },
     },
   },
   response: {
@@ -36,6 +37,7 @@ export const listProductsSchema = {
               slug: { type: 'string' },
               price: { type: 'number' },
               sale_price: { type: 'number', nullable: true },
+              wholesale_price: { type: 'number', nullable: true },
               stock_quantity: { type: 'integer' },
               unit: { type: 'string' },
               thumbnail_url: { type: 'string', nullable: true },
@@ -94,6 +96,7 @@ export const searchProductsSchema = {
     required: ['q'],
     properties: {
       q: { type: 'string', minLength: 1, maxLength: 100 },
+      priceMode: { type: 'string', enum: ['retail', 'wholesale'], default: 'retail' },
       page: { type: 'integer', minimum: 1, default: 1 },
       limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
     },
@@ -113,6 +116,12 @@ export const getProductSchema = {
     required: ['id'],
     properties: {
       id: { type: 'string', minLength: 1, maxLength: 200 },
+    },
+  },
+  querystring: {
+    type: 'object',
+    properties: {
+      priceMode: { type: 'string', enum: ['retail', 'wholesale'], default: 'retail' },
     },
   },
 }
@@ -142,6 +151,7 @@ export const createProductSchema = {
       price: { type: 'number', minimum: 0 },
       salePrice: { type: 'number', minimum: 0 },
       costPrice: { type: 'number', minimum: 0 },
+      wholesalePrice: { type: 'number', minimum: 0, nullable: true },
       categoryId: { type: 'string', format: 'uuid' },
       stock: { type: 'integer', minimum: 0, default: 0 },
       unit: { type: 'string', enum: ['kg', 'g', 'l', 'ml', 'piece', 'pack', 'dozen', 'box'] },
@@ -253,6 +263,7 @@ export const updateProductSchema = {
       price: { type: 'number', minimum: 0 },
       salePrice: { type: 'number', minimum: 0 },
       costPrice: { type: 'number', minimum: 0 },
+      wholesalePrice: { type: 'number', minimum: 0, nullable: true },
       categoryId: { type: 'string', format: 'uuid' },
       stock: { type: 'integer', minimum: 0 },
       unit: { type: 'string', enum: ['kg', 'g', 'l', 'ml', 'piece', 'pack', 'dozen', 'box'] },
