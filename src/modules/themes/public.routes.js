@@ -57,6 +57,7 @@ export default async function publicThemeRoutes(fastify) {
             type: 'string',
             enum: ['zepto', 'off_zone', 'super_mall', 'cafe'],
           },
+          priceMode: { type: 'string', enum: ['retail', 'wholesale'] },
         },
       },
       response: {
@@ -90,6 +91,7 @@ export default async function publicThemeRoutes(fastify) {
             type: 'string',
             enum: ['zepto', 'off_zone', 'super_mall', 'cafe'],
           },
+          priceMode: { type: 'string', enum: ['retail', 'wholesale'] },
         },
       },
       response: {
@@ -124,6 +126,7 @@ export default async function publicThemeRoutes(fastify) {
             type: 'string',
             enum: ['zepto', 'off_zone', 'super_mall', 'cafe'],
           },
+          priceMode: { type: 'string', enum: ['retail', 'wholesale'] },
         },
       },
       response: {

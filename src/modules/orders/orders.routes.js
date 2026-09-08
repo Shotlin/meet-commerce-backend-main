@@ -9,7 +9,7 @@ import { OrdersRepository } from './orders.repository.js'
 import { CartQuoteRepository } from '../cart-quote/cart-quote.repository.js'
 import { OrdersService } from './orders.service.js'
 import { OrdersController } from './orders.controller.js'
-import { CreateOrderFromQuoteSchema, UpdateOrderStatusSchema, CreateFulfilmentTaskSchema, UpdateFulfilmentTaskSchema } from './orders.schema.js'
+import { PlaceMobileOrderSchema, UpdateOrderStatusSchema, CreateFulfilmentTaskSchema, UpdateFulfilmentTaskSchema } from './orders.schema.js'
 
 export async function ordersRoutes(fastify) {
   const repository = new OrdersRepository()
@@ -17,11 +17,11 @@ export async function ordersRoutes(fastify) {
   const service = new OrdersService(repository, quoteRepository)
   const controller = new OrdersController(service)
 
-  // 1. Create Order from Checkout Quote
+  // 1. Place an order from the current mobile cart.
   fastify.post('/', {
     preHandler: [fastify.authenticate],
-    schema: { body: CreateOrderFromQuoteSchema },
-    handler: controller.createOrderFromQuote,
+    schema: { body: PlaceMobileOrderSchema },
+    handler: controller.placeOrder,
   })
 
   // 2. Transition Order Status (17-State Machine)

@@ -8,6 +8,105 @@
 import { query } from '../../config/database.js'
 
 export class OrdersRepository {
+  /**
+   * Allocate an order number inside the caller's transaction.  The sequence
+   * table makes simultaneous checkouts safe while keeping the printed number
+   * useful to customers and store staff: FC-HQC-YYYYMMDD-0001.
+   */
+  async generateCheckoutOrderNumber(client, shopId) {
+    const { rows: shops } = await client.query(
+      `SELECT COALESCE(NULLIF(order_prefix, ''), 'SHOP') AS order_prefix
+         FROM shops WHERE id = $1 FOR SHARE`,
+      [shopId]
+    )
+    if (!shops[0]) throw new Error('Store not found for order')
+
+    const { rows } = await client.query(
+      `INSERT INTO order_number_sequences (shop_id, order_date, last_value)
+       VALUES ($1, CURRENT_DATE, 1)
+       ON CONFLICT (shop_id, order_date)
+       DO UPDATE SET last_value = order_number_sequences.last_value + 1
+       RETURNING order_date, last_value`,
+      [shopId]
+    )
+    const date = String(rows[0].order_date).slice(0, 10).replaceAll('-', '')
+    const sequence = String(rows[0].last_value).padStart(4, '0')
+    return `FC-${shops[0].order_prefix}-${date}-${sequence}`
+  }
+
+  /** Create a store-scoped checkout order and its immutable item snapshots. */
+  async createCheckoutOrder(client, data) {
+    const { rows } = await client.query(
+      `INSERT INTO orders (
+        order_number, customer_id, shop_id, status, items,
+        subtotal, discount_amount, loyalty_redeemed_amount,
+        delivery_fee, platform_fee, tax_amount, total_payable,
+        payment_method, payment_status, coupon_code, delivery_address,
+        delivery_notes, estimated_delivery
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18
+      )
+      RETURNING *`,
+      [
+        data.orderNumber, data.customerId, data.shopId, data.status,
+        JSON.stringify(data.items), data.subtotal, data.discountAmount || 0,
+        0, data.deliveryFee || 0, data.platformFee || 0, data.taxAmount || 0,
+        data.totalPayable, data.paymentMethod, data.paymentStatus,
+        data.couponCode || null, JSON.stringify(data.deliveryAddress),
+        data.deliveryNotes || null, data.estimatedDelivery || null,
+      ]
+    )
+
+    for (const item of data.items) {
+      await client.query(
+        `INSERT INTO order_items (
+          order_id, product_id, product_name, quantity, unit_price, subtotal,
+          product_snapshot, shop_product_id, shop_id
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          rows[0].id, item.productId, item.name, item.quantity, item.price,
+          item.total, JSON.stringify(item), item.shopProductId || null,
+          data.shopId,
+        ]
+      )
+    }
+    return rows[0]
+  }
+
+  async findByIdAndUser(orderId, userId) {
+    const { rows } = await query(
+      `SELECT * FROM orders WHERE id = $1 AND customer_id = $2 LIMIT 1`,
+      [orderId, userId]
+    )
+    return rows[0] ? this._formatCheckoutOrder(rows[0]) : null
+  }
+
+  _formatCheckoutOrder(row) {
+    return {
+      id: row.id,
+      orderNumber: row.order_number,
+      customerId: row.customer_id,
+      shopId: row.shop_id || null,
+      status: row.status,
+      items: typeof row.items === 'string' ? JSON.parse(row.items) : row.items,
+      subtotal: Number(row.subtotal || 0),
+      discountAmount: Number(row.discount_amount || 0),
+      deliveryFee: Number(row.delivery_fee || 0),
+      platformFee: Number(row.platform_fee || 0),
+      taxAmount: Number(row.tax_amount || 0),
+      totalAmount: Number(row.total_payable || 0),
+      paymentMethod: row.payment_method,
+      paymentStatus: row.payment_status,
+      couponCode: row.coupon_code || null,
+      deliveryAddress: typeof row.delivery_address === 'string'
+        ? JSON.parse(row.delivery_address)
+        : row.delivery_address,
+      deliveryNotes: row.delivery_notes || null,
+      estimatedDelivery: row.estimated_delivery || null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }
+  }
   async createOrder({ order_number, quote_id, customer_id, warehouse_id = null, status = 'ORDER_PLACED', subtotal, discount_amount, loyalty_redeemed_amount, tax_amount, total_payable }) {
     const { rows } = await query(
       `INSERT INTO orders (order_number, quote_id, customer_id, warehouse_id, status, subtotal, discount_amount, loyalty_redeemed_amount, tax_amount, total_payable)

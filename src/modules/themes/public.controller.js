@@ -88,8 +88,11 @@ export class PublicThemeController {
    *   - [shopId, ...] otherwise
    */
   async _resolveAllocatedShopIds(request) {
-    const customerContext = resolveCustomerContext(request)
+    const customerContext = await resolveCustomerContext(request)
     if (!customerContext) return null
+    if (Array.isArray(customerContext.shopIds)) {
+      return customerContext.shopIds
+    }
     try {
       const ids = await this.allocationService.getShopIdsForUser(customerContext.userId)
       return Array.isArray(ids) ? ids : []
@@ -188,6 +191,9 @@ export class PublicThemeController {
   async getTabHomeContent(request, reply) {
     const storeKey = normalizeStoreKey(request.query?.store_key)
     const tabKey = `${request.params.key || ''}`.trim()
+    const priceMode = request.query?.priceMode === 'wholesale'
+      ? 'wholesale'
+      : 'retail'
 
     if (!tabKey) {
       reply.code(400)
@@ -195,7 +201,7 @@ export class PublicThemeController {
     }
 
     const allocatedShopIds = await this._resolveAllocatedShopIds(request)
-    const cacheKey = `${getTabHomeCacheKey(storeKey, tabKey)}:${shopBucketKey(allocatedShopIds)}`
+    const cacheKey = `${getTabHomeCacheKey(storeKey, tabKey)}:${shopBucketKey(allocatedShopIds)}:${priceMode}`
     const cached = await redis.get(cacheKey)
     if (cached) {
       return success(JSON.parse(cached), 'Tab home content')
@@ -213,41 +219,47 @@ export class PublicThemeController {
     // limit clamped to HOME_CAPS.* — regardless of what the dashboard stored.
     const featuredProducts = await resolveSectionProducts(
       merchConfig.featured,
-      () => getFeaturedProducts(HOME_CAPS.featured, allocatedShopIds),
+      () => getFeaturedProducts(HOME_CAPS.featured, allocatedShopIds, priceMode),
       HOME_CAPS.featured,
-      allocatedShopIds
+      allocatedShopIds,
+      priceMode
     )
     const dealProducts = await resolveSectionProducts(
       merchConfig.deals,
-      () => getDealProducts(HOME_CAPS.deals, allocatedShopIds),
+      () => getDealProducts(HOME_CAPS.deals, allocatedShopIds, priceMode),
       HOME_CAPS.deals,
-      allocatedShopIds
+      allocatedShopIds,
+      priceMode
     )
     const trendingProducts = await resolveSectionProducts(
       merchConfig.trending,
-      () => getTrendingProducts(HOME_CAPS.trending, allocatedShopIds),
+      () => getTrendingProducts(HOME_CAPS.trending, allocatedShopIds, priceMode),
       HOME_CAPS.trending,
-      allocatedShopIds
+      allocatedShopIds,
+      priceMode
     )
     const seasonalProducts = await resolveSectionProducts(
       merchConfig.seasonal_mosaic,
       async () => mergeUniqueProducts([
-        await getDealProducts(HOME_CAPS.seasonal, allocatedShopIds),
-        await getFeaturedProducts(HOME_CAPS.seasonal, allocatedShopIds),
-        await getTrendingProducts(HOME_CAPS.seasonal, allocatedShopIds),
+        await getDealProducts(HOME_CAPS.seasonal, allocatedShopIds, priceMode),
+        await getFeaturedProducts(HOME_CAPS.seasonal, allocatedShopIds, priceMode),
+        await getTrendingProducts(HOME_CAPS.seasonal, allocatedShopIds, priceMode),
       ]).slice(0, HOME_CAPS.seasonal),
       HOME_CAPS.seasonal,
-      allocatedShopIds
+      allocatedShopIds,
+      priceMode
     )
     const categorySections = await resolveCategorySections(
       merchConfig.category_rails,
       async () => getDefaultCategorySections(
         HOME_CAPS.defaultRailCount,
         HOME_CAPS.defaultRailItems,
-        allocatedShopIds
+        allocatedShopIds,
+        priceMode
       ),
       HOME_CAPS.categoryRail,
-      allocatedShopIds
+      allocatedShopIds,
+      priceMode
     )
 
     const responseData = {
@@ -332,6 +344,9 @@ export class PublicThemeController {
   async getSectionManifest(request, reply) {
     const storeKey = normalizeStoreKey(request.query?.store_key)
     const tabKey = `${request.params.tabKey || ''}`.trim()
+    const priceMode = request.query?.priceMode === 'wholesale'
+      ? 'wholesale'
+      : 'retail'
 
     if (!tabKey) {
       reply.code(400)
@@ -340,7 +355,7 @@ export class PublicThemeController {
 
     const allocatedShopIds = await this._resolveAllocatedShopIds(request)
     const clientETag = request.headers['if-none-match']
-    const cacheKey = `${getSectionPublicCacheKey(storeKey, tabKey)}:${shopBucketKey(allocatedShopIds)}`
+    const cacheKey = `${getSectionPublicCacheKey(storeKey, tabKey)}:${shopBucketKey(allocatedShopIds)}:${priceMode}`
 
     const cached = await redis.get(cacheKey)
     if (cached) {
@@ -387,14 +402,28 @@ export class PublicThemeController {
         const categoryIds = Array.isArray(binding.category_ids) ? binding.category_ids : []
         const limit = normalizeLimit(binding.limit, HOME_MANIFEST_SECTION_CAP, HOME_MANIFEST_SECTION_CAP)
 
-        // No IDs configured — section uses its own rendering logic (banners, spacers, etc.)
+        // Static sections do not need products. Product sections with no
+        // manual/category binding, however, are still valid dashboard
+        // sections: their intended source is the store's live feed (for
+        // example Trending or Best Sellers). Resolve that feed here so the
+        // mobile receives one self-contained, shop-scoped manifest instead
+        // of relying on a second asynchronous home request.
         if (productIds.length === 0 && categoryIds.length === 0) {
+          const products = await getImplicitSectionProducts(
+            section,
+            limit,
+            allocatedShopIds,
+            priceMode
+          )
+          if (products.length > 0) {
+            return { ...section, products }
+          }
           return section
         }
 
         // Fetch manually pinned products first, preserving dashboard order
         const manualProducts = productIds.length > 0
-          ? await getProductsByIds(productIds, allocatedShopIds)
+          ? await getProductsByIds(productIds, allocatedShopIds, priceMode)
           : []
         const seenIds = manualProducts.map((p) => p.id)
 
@@ -405,7 +434,8 @@ export class PublicThemeController {
             categoryIds,
             limit - products.length,
             seenIds,
-            allocatedShopIds
+            allocatedShopIds,
+            priceMode
           )
           products = [...manualProducts, ...fillProducts]
         }
@@ -573,7 +603,7 @@ async function getTabDefinition(storeKey, tabKey) {
   return tab || null
 }
 
-async function resolveSectionProducts(config, fallbackResolver, cap, allocatedShopIds) {
+async function resolveSectionProducts(config, fallbackResolver, cap, allocatedShopIds, priceMode = 'retail') {
   const productIds = Array.isArray(config?.product_ids) ? config.product_ids : []
   const categoryIds = Array.isArray(config?.category_ids) ? config.category_ids : []
   // PHASE 5B: normalizeLimit honours dashboard config but clamps to cap.
@@ -583,7 +613,7 @@ async function resolveSectionProducts(config, fallbackResolver, cap, allocatedSh
     return (await fallbackResolver()).slice(0, limit)
   }
 
-  const manualProducts = await getProductsByIds(productIds, allocatedShopIds)
+  const manualProducts = await getProductsByIds(productIds, allocatedShopIds, priceMode)
   const seenIds = new Set(manualProducts.map((product) => product.id))
 
   if (manualProducts.length >= limit || categoryIds.length === 0) {
@@ -594,13 +624,49 @@ async function resolveSectionProducts(config, fallbackResolver, cap, allocatedSh
     categoryIds,
     limit - manualProducts.length,
     [...seenIds],
-    allocatedShopIds
+    allocatedShopIds,
+    priceMode
   )
 
   return [...manualProducts, ...fillProducts].slice(0, limit)
 }
 
-async function resolveCategorySections(rails, fallbackResolver, railCap, allocatedShopIds) {
+/**
+ * Resolves the live store catalogue for a dashboard product section that has
+ * no explicit merch binding. These are the common "Trending" and "Best
+ * Sellers" sections. Keeping this at the API boundary makes every returned
+ * product use the selected shop's availability and B2B/B2C price.
+ */
+async function getImplicitSectionProducts(section, limit, allocatedShopIds, priceMode) {
+  const sectionLimit = normalizeLimit(
+    section.config?.limit,
+    limit || HOME_CAPS.defaultRailItems,
+    HOME_MANIFEST_SECTION_CAP
+  )
+
+  switch (section.type) {
+    case 'trending_products':
+      return getTrendingProducts(sectionLimit, allocatedShopIds, priceMode)
+    case 'seasonal_mosaic':
+      return mergeUniqueProducts([
+        await getDealProducts(sectionLimit, allocatedShopIds, priceMode),
+        await getFeaturedProducts(sectionLimit, allocatedShopIds, priceMode),
+        await getTrendingProducts(sectionLimit, allocatedShopIds, priceMode),
+      ]).slice(0, sectionLimit)
+    case 'category_product_grid':
+    case 'product_carousel':
+    case 'arched_product_showcase':
+      return mergeUniqueProducts([
+        await getFeaturedProducts(sectionLimit, allocatedShopIds, priceMode),
+        await getDealProducts(sectionLimit, allocatedShopIds, priceMode),
+        await getTrendingProducts(sectionLimit, allocatedShopIds, priceMode),
+      ]).slice(0, sectionLimit)
+    default:
+      return []
+  }
+}
+
+async function resolveCategorySections(rails, fallbackResolver, railCap, allocatedShopIds, priceMode = 'retail') {
   if (!Array.isArray(rails) || rails.length === 0) {
     return fallbackResolver()
   }
@@ -614,7 +680,8 @@ async function resolveCategorySections(rails, fallbackResolver, railCap, allocat
     const limit = normalizeLimit(rail.limit, HOME_CAPS.categoryRail, railCap)
     const manualProducts = await getProductsByIds(
       Array.isArray(rail.product_ids) ? rail.product_ids : [],
-      allocatedShopIds
+      allocatedShopIds,
+      priceMode
     )
     const seenIds = manualProducts.map((product) => product.id)
     const fillProducts =
@@ -623,7 +690,8 @@ async function resolveCategorySections(rails, fallbackResolver, railCap, allocat
             [rail.category_id],
             limit - manualProducts.length,
             seenIds,
-            allocatedShopIds
+            allocatedShopIds,
+            priceMode
           )
         : []
 
@@ -641,14 +709,14 @@ async function resolveCategorySections(rails, fallbackResolver, railCap, allocat
   return sections.length > 0 ? sections : fallbackResolver()
 }
 
-async function getProductsByIds(productIds, allocatedShopIds = null) {
+async function getProductsByIds(productIds, allocatedShopIds = null, priceMode = 'retail') {
   if (!Array.isArray(productIds) || productIds.length === 0) {
     return []
   }
 
   const params = [productIds]
   const visibility = buildCustomerVisibilitySnippet(allocatedShopIds, params, params.length + 1)
-  const shopPrice = buildShopPriceJoin(allocatedShopIds, params, visibility.nextIdx)
+  const shopPrice = buildShopPriceJoin(allocatedShopIds, params, visibility.nextIdx, priceMode)
   // Unscoped (anonymous/admin) callers keep the legacy master-catalog stock
   // check; scoped callers rely on the shop's own is_available flag instead
   // (see buildCustomerVisibilitySnippet), matching products.repository.js.
@@ -728,7 +796,7 @@ async function getProductsByIds(productIds, allocatedShopIds = null) {
  * ORDER BY/LIMIT — otherwise a single large/high-selling category could
  * crowd out every product from the other requested categories.
  */
-export async function getProductsByCategoryIds(categoryIds, limit, excludeIds = [], allocatedShopIds = null) {
+export async function getProductsByCategoryIds(categoryIds, limit, excludeIds = [], allocatedShopIds = null, priceMode = 'retail') {
   if (!Array.isArray(categoryIds) || categoryIds.length === 0 || limit <= 0) {
     return []
   }
@@ -741,7 +809,7 @@ export async function getProductsByCategoryIds(categoryIds, limit, excludeIds = 
   }
 
   const visibility = buildCustomerVisibilitySnippet(allocatedShopIds, params, params.length + 1)
-  const shopPrice = buildShopPriceJoin(allocatedShopIds, params, visibility.nextIdx)
+  const shopPrice = buildShopPriceJoin(allocatedShopIds, params, visibility.nextIdx, priceMode)
   const legacyStockCheck = allocatedShopIds === null ? 'AND p.stock_quantity > 0' : ''
 
   const { rows } = await query(
@@ -835,10 +903,10 @@ export async function getProductsByCategoryIds(categoryIds, limit, excludeIds = 
   return rows
 }
 
-async function getFeaturedProducts(limit, allocatedShopIds = null) {
+async function getFeaturedProducts(limit, allocatedShopIds = null, priceMode = 'retail') {
   const params = []
   const visibility = buildCustomerVisibilitySnippet(allocatedShopIds, params, params.length + 1)
-  const shopPrice = buildShopPriceJoin(allocatedShopIds, params, visibility.nextIdx)
+  const shopPrice = buildShopPriceJoin(allocatedShopIds, params, visibility.nextIdx, priceMode)
   const legacyStockCheck = allocatedShopIds === null ? 'AND p.stock_quantity > 0' : ''
   params.push(limit)
   const limitIdx = params.length
@@ -900,10 +968,10 @@ async function getFeaturedProducts(limit, allocatedShopIds = null) {
   return rows
 }
 
-async function getDealProducts(limit, allocatedShopIds = null) {
+async function getDealProducts(limit, allocatedShopIds = null, priceMode = 'retail') {
   const params = []
   const visibility = buildCustomerVisibilitySnippet(allocatedShopIds, params, params.length + 1)
-  const shopPrice = buildShopPriceJoin(allocatedShopIds, params, visibility.nextIdx)
+  const shopPrice = buildShopPriceJoin(allocatedShopIds, params, visibility.nextIdx, priceMode)
   const legacyStockCheck = allocatedShopIds === null ? 'AND p.stock_quantity > 0' : ''
   params.push(limit)
   const limitIdx = params.length
@@ -966,10 +1034,10 @@ async function getDealProducts(limit, allocatedShopIds = null) {
   return rows
 }
 
-async function getTrendingProducts(limit, allocatedShopIds = null) {
+async function getTrendingProducts(limit, allocatedShopIds = null, priceMode = 'retail') {
   const params = []
   const visibility = buildCustomerVisibilitySnippet(allocatedShopIds, params, params.length + 1)
-  const shopPrice = buildShopPriceJoin(allocatedShopIds, params, visibility.nextIdx)
+  const shopPrice = buildShopPriceJoin(allocatedShopIds, params, visibility.nextIdx, priceMode)
   const legacyStockCheck = allocatedShopIds === null ? 'AND p.stock_quantity > 0' : ''
   params.push(limit)
   const limitIdx = params.length
@@ -1030,7 +1098,7 @@ async function getTrendingProducts(limit, allocatedShopIds = null) {
   return rows
 }
 
-async function getDefaultCategorySections(limitSections, itemsPerSection, allocatedShopIds = null) {
+async function getDefaultCategorySections(limitSections, itemsPerSection, allocatedShopIds = null, priceMode = 'retail') {
   const { rows: categories } = await query(
     `SELECT
        c.id,
@@ -1054,7 +1122,7 @@ async function getDefaultCategorySections(limitSections, itemsPerSection, alloca
   const sections = []
   for (const category of categories) {
     // PHASE 5B: use configurable per-rail cap.
-    const products = await getProductsByCategoryIds([category.id], perRail, [], allocatedShopIds)
+    const products = await getProductsByCategoryIds([category.id], perRail, [], allocatedShopIds, priceMode)
     if (products.length === 0) continue
     sections.push({
       category_id: category.id,

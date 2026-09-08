@@ -11,6 +11,18 @@ const CART_INSTRUCTIONS_PREFIX = 'cart-instructions:'
 // updated_at/last_activity field of its own, only the Redis TTL.
 const CART_ACTIVITY_ZSET = 'cart-activity'
 
+function normalizePriceMode(value) {
+  return value === 'wholesale' ? 'wholesale' : 'retail'
+}
+
+function cartKey(userId, priceMode) {
+  return `${CART_PREFIX}${normalizePriceMode(priceMode)}:${userId}`
+}
+
+function cartExtraKey(prefix, userId, priceMode) {
+  return `${prefix}${normalizePriceMode(priceMode)}:${userId}`
+}
+
 /**
  * Cart repository
  *
@@ -32,8 +44,8 @@ export class CartRepository {
    * `{ productId, shopId, quantity }`. Legacy entries without shopId are
    * filtered out so multi-vendor checkout can group safely (Requirement 5.6).
    */
-  async getCart(userId) {
-    const data = await redis.get(`${CART_PREFIX}${userId}`)
+  async getCart(userId, priceMode = 'retail') {
+    const data = await redis.get(cartKey(userId, priceMode))
     if (!data) return []
     let parsed
     try {
@@ -55,7 +67,7 @@ export class CartRepository {
    * Save entire cart to Redis. Caller must pass the new array shape
    * `{ productId, shopId, quantity }`.
    */
-  async saveCart(userId, items) {
+  async saveCart(userId, items, priceMode = 'retail') {
     const normalized = (items || [])
       .filter((i) => i && i.productId && i.shopId && i.quantity > 0)
       .map((i) => ({
@@ -64,7 +76,7 @@ export class CartRepository {
         quantity: Number(i.quantity),
       }))
     await redis.set(
-      `${CART_PREFIX}${userId}`,
+      cartKey(userId, priceMode),
       JSON.stringify(normalized),
       'EX',
       CART_TTL
@@ -75,8 +87,8 @@ export class CartRepository {
   /**
    * Clear cart
    */
-  async clearCart(userId) {
-    await redis.del(`${CART_PREFIX}${userId}`)
+  async clearCart(userId, priceMode = 'retail') {
+    await redis.del(cartKey(userId, priceMode))
     await redis.zrem(CART_ACTIVITY_ZSET, userId)
   }
 
@@ -149,6 +161,7 @@ export class CartRepository {
               sp.product_id,
               sp.price         AS sp_price,
               sp.sale_price    AS sp_sale_price,
+              sp.wholesale_price AS sp_wholesale_price,
               sp.stock_quantity,
               sp.max_order_qty,
               sp.is_available,
@@ -207,6 +220,7 @@ export class CartRepository {
               sp.product_id,
               sp.price         AS sp_price,
               sp.sale_price    AS sp_sale_price,
+              sp.wholesale_price AS sp_wholesale_price,
               sp.stock_quantity,
               sp.max_order_qty,
               sp.is_available,
@@ -318,6 +332,7 @@ export class CartRepository {
               sp.product_id,
               sp.price         AS sp_price,
               sp.sale_price    AS sp_sale_price,
+              sp.wholesale_price AS sp_wholesale_price,
               sp.stock_quantity,
               sp.max_order_qty,
               sp.is_available,
@@ -363,50 +378,50 @@ export class CartRepository {
   /**
    * Get tip amount from Redis
    */
-  async getTip(userId) {
-    const tip = await redis.get(`${CART_TIP_PREFIX}${userId}`)
+  async getTip(userId, priceMode = 'retail') {
+    const tip = await redis.get(cartExtraKey(CART_TIP_PREFIX, userId, priceMode))
     return tip ? parseFloat(tip) : 0
   }
 
   /**
    * Set tip amount in Redis (7-day TTL)
    */
-  async setTip(userId, amount) {
-    await redis.set(`${CART_TIP_PREFIX}${userId}`, String(amount), 'EX', CART_TTL)
+  async setTip(userId, amount, priceMode = 'retail') {
+    await redis.set(cartExtraKey(CART_TIP_PREFIX, userId, priceMode), String(amount), 'EX', CART_TTL)
     await redis.zadd(CART_ACTIVITY_ZSET, Date.now(), userId)
   }
 
   /**
    * Clear tip amount
    */
-  async clearTip(userId) {
-    await redis.del(`${CART_TIP_PREFIX}${userId}`)
+  async clearTip(userId, priceMode = 'retail') {
+    await redis.del(cartExtraKey(CART_TIP_PREFIX, userId, priceMode))
   }
 
   /**
    * Get delivery instructions from Redis
    */
-  async getInstructions(userId) {
-    return await redis.get(`${CART_INSTRUCTIONS_PREFIX}${userId}`) || null
+  async getInstructions(userId, priceMode = 'retail') {
+    return await redis.get(cartExtraKey(CART_INSTRUCTIONS_PREFIX, userId, priceMode)) || null
   }
 
   /**
    * Set delivery instructions in Redis (7-day TTL)
    */
-  async setInstructions(userId, text) {
+  async setInstructions(userId, text, priceMode = 'retail') {
     if (text && text.trim()) {
-      await redis.set(`${CART_INSTRUCTIONS_PREFIX}${userId}`, text.trim(), 'EX', CART_TTL)
+      await redis.set(cartExtraKey(CART_INSTRUCTIONS_PREFIX, userId, priceMode), text.trim(), 'EX', CART_TTL)
       await redis.zadd(CART_ACTIVITY_ZSET, Date.now(), userId)
     } else {
-      await this.clearInstructions(userId)
+      await this.clearInstructions(userId, priceMode)
     }
   }
 
   /**
    * Clear delivery instructions
    */
-  async clearInstructions(userId) {
-    await redis.del(`${CART_INSTRUCTIONS_PREFIX}${userId}`)
+  async clearInstructions(userId, priceMode = 'retail') {
+    await redis.del(cartExtraKey(CART_INSTRUCTIONS_PREFIX, userId, priceMode))
   }
 
   /**
@@ -426,10 +441,10 @@ export class CartRepository {
   /**
    * Clear tip and instructions on order placement
    */
-  async clearExtras(userId) {
+  async clearExtras(userId, priceMode = 'retail') {
     await Promise.all([
-      this.clearTip(userId),
-      this.clearInstructions(userId),
+      this.clearTip(userId, priceMode),
+      this.clearInstructions(userId, priceMode),
     ])
   }
 }

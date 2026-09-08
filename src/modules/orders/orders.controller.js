@@ -19,6 +19,12 @@ export class OrdersController {
     return reply.status(201).send({ success: true, data: order })
   }
 
+  placeOrder = async (req, reply) => {
+    const customerId = req.userId || req.user.id
+    const result = await this.service.placeOrder(customerId, req.body)
+    return reply.status(201).send({ success: true, data: result })
+  }
+
   transitionOrderStatus = async (req, reply) => {
     const { orderId } = req.params
     const actorId = req.userId || req.user.id

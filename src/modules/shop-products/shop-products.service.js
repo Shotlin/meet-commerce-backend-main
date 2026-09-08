@@ -465,7 +465,16 @@ export class ShopProductsService {
    * @param {string} shopId
    */
   async invalidateShopCache(shopId) {
-    await cacheDeletePattern(`${CACHE_PREFIX}:${shopId}:*`)
+    // A shop-product write changes the customer storefront, not only the
+    // private inventory list. Clear every derived customer payload so a
+    // deleted/unavailable product cannot remain in a product rail or a
+    // category screen until its normal Redis TTL expires.
+    await Promise.all([
+      cacheDeletePattern(`${CACHE_PREFIX}:${shopId}:*`),
+      cacheDeletePattern('products:*'),
+      cacheDeletePattern('bakaloo:tab_home:*'),
+      cacheDeletePattern('bakaloo:sections:public:*'),
+    ])
   }
 
   // ────────────────────────────────────────────────────────

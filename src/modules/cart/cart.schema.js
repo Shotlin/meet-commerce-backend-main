@@ -64,6 +64,7 @@ const cartResponse = {
         totalSavings:         { type: 'number' },
         tipAmount:            { type: 'number' },
         deliveryInstructions: { type: ['string', 'null'] },
+        priceMode:            { type: 'string', enum: ['retail', 'wholesale'] },
         shopGroups:           { type: 'array', items: shopGroupResponse },
       },
     },
@@ -86,6 +87,8 @@ export const addItemSchema = {
       productId:     { type: 'string', format: 'uuid' },
       shopId:        { type: 'string', format: 'uuid' },
       shopProductId: { type: 'string', format: 'uuid' },
+      priceMode: { type: 'string', enum: ['retail', 'wholesale'] },
+      priceMode: { type: 'string', enum: ['retail', 'wholesale'] },
       quantity:      { type: 'integer', minimum: 1, maximum: 10000 },
     },
     anyOf: [
@@ -113,6 +116,7 @@ export const updateItemSchema = {
       quantity:      { type: 'integer', minimum: 1, maximum: 10000 },
       shopId:        { type: 'string', format: 'uuid' },
       shopProductId: { type: 'string', format: 'uuid' },
+      priceMode: { type: 'string', enum: ['retail', 'wholesale'] },
     },
   },
   response: { 200: cartResponse },
@@ -305,6 +309,7 @@ export const updateTipSchema = {
     required: ['amount'],
     properties: {
       amount: { type: 'number', minimum: 0, maximum: 500 },
+      priceMode: { type: 'string', enum: ['retail', 'wholesale'] },
     },
   },
   response: {
@@ -333,6 +338,7 @@ export const updateDeliveryInstructionsSchema = {
     required: ['instructions'],
     properties: {
       instructions: { type: 'string', maxLength: 200 },
+      priceMode: { type: 'string', enum: ['retail', 'wholesale'] },
     },
   },
   response: {

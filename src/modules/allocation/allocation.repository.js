@@ -1,4 +1,4 @@
-import { query, getClient } from '../../config/database.js'
+import { query, getClient } from "../../config/database.js";
 
 /**
  * Allocation repository — all SQL queries for user_shop_allocations
@@ -17,9 +17,21 @@ import { query, getClient } from '../../config/database.js'
  */
 
 // Earth's radius in km used by the haversine formula
-const EARTH_RADIUS_KM = 6371
+const EARTH_RADIUS_KM = 6371;
 
 export class AllocationRepository {
+  async findByShopIds(shopIds) {
+    if (!Array.isArray(shopIds) || shopIds.length === 0) return [];
+    const { rows } = await query(
+      `SELECT id AS shop_id, name
+         FROM shops
+        WHERE id = ANY($1::uuid[])
+          AND is_active = true
+          AND deleted_at IS NULL`,
+      [shopIds],
+    );
+    return rows;
+  }
   // ────────────────────────────────────────────────────────
   // Read paths — used by the customer-facing GET /my-shops
   // ────────────────────────────────────────────────────────
@@ -49,9 +61,9 @@ export class AllocationRepository {
           AND s.is_active = true
           AND s.deleted_at IS NULL
         ORDER BY a.is_primary DESC, a.distance_km ASC NULLS LAST, a.allocated_at ASC`,
-      [userId]
-    )
-    return rows
+      [userId],
+    );
+    return rows;
   }
 
   /**
@@ -76,9 +88,9 @@ export class AllocationRepository {
           AND s.is_active = true
           AND s.deleted_at IS NULL
         ORDER BY a.is_primary DESC, a.distance_km ASC NULLS LAST, a.allocated_at ASC`,
-      [userId]
-    )
-    return rows.map((r) => r.shop_id)
+      [userId],
+    );
+    return rows.map((r) => r.shop_id);
   }
 
   // ────────────────────────────────────────────────────────
@@ -104,7 +116,7 @@ export class AllocationRepository {
    */
   async findShopsByPincode(pincode, coords = {}) {
     const hasCoords =
-      Number.isFinite(coords.lat) && Number.isFinite(coords.lng)
+      Number.isFinite(coords.lat) && Number.isFinite(coords.lng);
 
     if (hasCoords) {
       const { rows } = await query(
@@ -121,9 +133,9 @@ export class AllocationRepository {
           WHERE s.is_active = true
             AND s.deleted_at IS NULL
             AND $1 = ANY(s.serviceable_pincodes)`,
-        [pincode, coords.lat, coords.lng]
-      )
-      return rows
+        [pincode, coords.lat, coords.lng],
+      );
+      return rows;
     }
 
     const { rows } = await query(
@@ -134,9 +146,9 @@ export class AllocationRepository {
         WHERE s.is_active = true
           AND s.deleted_at IS NULL
           AND $1 = ANY(s.serviceable_pincodes)`,
-      [pincode]
-    )
-    return rows
+      [pincode],
+    );
+    return rows;
   }
 
   /**
@@ -177,9 +189,9 @@ export class AllocationRepository {
               AND s.pincode_only = false
          ) candidates
         WHERE distance_km <= delivery_radius_km`,
-      [lat, lng]
-    )
-    return rows
+      [lat, lng],
+    );
+    return rows;
   }
 
   /**
@@ -202,7 +214,7 @@ export class AllocationRepository {
    * @returns {Promise<boolean>}
    */
   async isServiceable({ pincode, lat, lng, shopId = null } = {}) {
-    const hasCoords = Number.isFinite(lat) && Number.isFinite(lng)
+    const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
     const { rows } = await query(
       `SELECT EXISTS (
          SELECT 1 FROM shops s
@@ -229,9 +241,9 @@ export class AllocationRepository {
         hasCoords ? lat : null,
         hasCoords ? lng : null,
         hasCoords,
-      ]
-    )
-    return rows[0]?.serviceable === true
+      ],
+    );
+    return rows[0]?.serviceable === true;
   }
 
   // ────────────────────────────────────────────────────────
@@ -263,16 +275,16 @@ export class AllocationRepository {
    * @returns {Promise<number>} Number of rows inserted/updated
    */
   async replaceForUser(userId, allocations) {
-    const client = await getClient()
+    const client = await getClient();
     try {
-      await client.query('BEGIN')
+      await client.query("BEGIN");
 
       await client.query(
         `DELETE FROM user_shop_allocations WHERE user_id = $1`,
-        [userId]
-      )
+        [userId],
+      );
 
-      let upserted = 0
+      let upserted = 0;
       for (const a of allocations) {
         const { rowCount } = await client.query(
           `INSERT INTO user_shop_allocations (
@@ -283,28 +295,22 @@ export class AllocationRepository {
                  matched_pincode = EXCLUDED.matched_pincode,
                  is_primary      = EXCLUDED.is_primary,
                  allocated_at    = NOW()`,
-          [
-            userId,
-            a.shop_id,
-            a.distance_km,
-            a.matched_pincode,
-            a.is_primary,
-          ]
-        )
-        upserted += rowCount
+          [userId, a.shop_id, a.distance_km, a.matched_pincode, a.is_primary],
+        );
+        upserted += rowCount;
       }
 
-      await client.query('COMMIT')
-      return upserted
+      await client.query("COMMIT");
+      return upserted;
     } catch (err) {
       try {
-        await client.query('ROLLBACK')
+        await client.query("ROLLBACK");
       } catch {
         /* swallow rollback errors */
       }
-      throw err
+      throw err;
     } finally {
-      client.release()
+      client.release();
     }
   }
 
@@ -334,15 +340,18 @@ export class AllocationRepository {
    *   pincode: string|null
    * }>>}
    */
-  async findUsersAffectedByShop(shopId, { afterUserId = null, limit = 200 } = {}) {
-    const safeLimit = Math.max(1, Math.min(1000, Number(limit) || 200))
-    const params = [shopId]
-    let cursorClause = ''
+  async findUsersAffectedByShop(
+    shopId,
+    { afterUserId = null, limit = 200 } = {},
+  ) {
+    const safeLimit = Math.max(1, Math.min(1000, Number(limit) || 200));
+    const params = [shopId];
+    let cursorClause = "";
     if (afterUserId) {
-      params.push(afterUserId)
-      cursorClause = `AND u.id > $${params.length}`
+      params.push(afterUserId);
+      cursorClause = `AND u.id > $${params.length}`;
     }
-    params.push(safeLimit)
+    params.push(safeLimit);
 
     const { rows } = await query(
       `WITH target AS (
@@ -379,14 +388,14 @@ export class AllocationRepository {
               ${cursorClause}
         ORDER BY u.id ASC
         LIMIT $${params.length}`,
-      params
-    )
+      params,
+    );
 
     return rows.map((r) => ({
       user_id: r.user_id,
       lat: r.lat !== null && r.lat !== undefined ? Number(r.lat) : null,
       lng: r.lng !== null && r.lng !== undefined ? Number(r.lng) : null,
       pincode: r.pincode,
-    }))
+    }));
   }
 }

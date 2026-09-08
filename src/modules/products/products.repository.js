@@ -130,7 +130,10 @@ export function buildShopPriceJoin(allocatedShopIds, params, startIdx, priceMode
     priceExpr: isWholesale
       ? 'COALESCE(shop_price.sp_wholesale_price, p.wholesale_price, shop_price.sp_price, p.price)'
       : 'COALESCE(shop_price.sp_price, p.price)',
-    salePriceExpr: isWholesale ? 'NULL' : 'COALESCE(shop_price.sp_sale_price, p.sale_price)',
+    // A scoped store listing owns its retail promotion. Falling back to the
+    // master sale price makes a store price of ₹100 display as a master
+    // catalogue ₹95 sale even when that store has no sale configured.
+    salePriceExpr: isWholesale ? 'NULL' : 'shop_price.sp_sale_price',
     stockExpr: 'COALESCE(shop_price.sp_stock_quantity, p.stock_quantity)',
     nextIdx: startIdx + 1,
   }

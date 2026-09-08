@@ -15,6 +15,26 @@ export const CreateOrderFromQuoteSchema = {
   additionalProperties: false,
 }
 
+export const PlaceMobileOrderSchema = {
+  type: 'object',
+  required: ['addressId', 'paymentMethod'],
+  properties: {
+    addressId: { type: 'string', format: 'uuid' },
+    paymentMethod: { type: 'string', enum: ['COD', 'ONLINE', 'WALLET'] },
+    priceMode: { type: 'string', enum: ['retail', 'wholesale'] },
+    couponCode: { type: 'string', maxLength: 50 },
+    deliveryNotes: { type: 'string', maxLength: 500 },
+    deliveryMode: { type: 'string', enum: ['ASAP', 'SCHEDULED'] },
+    scheduledDeliveryAt: { type: 'string' },
+    scheduledSlotStart: { type: 'string' },
+    scheduledSlotEnd: { type: 'string' },
+    scheduledSlotLabel: { type: 'string', maxLength: 100 },
+    quickDeliverySelected: { type: 'boolean' },
+    useWallet: { type: 'boolean' },
+  },
+  additionalProperties: false,
+}
+
 export const UpdateOrderStatusSchema = {
   type: 'object',
   required: ['status'],

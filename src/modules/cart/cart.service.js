@@ -23,6 +23,7 @@ import { PurchaseLimitsService } from '../purchase-limits/purchase-limits.servic
  * callers (controller / OrderSplitter) can render them consistently.
  */
 export const MAX_CART_ITEMS = 50
+const normalizePriceMode = (value) => value === 'wholesale' ? 'wholesale' : 'retail'
 
 export class CartService {
   constructor(repository, deps = {}) {
@@ -75,12 +76,13 @@ export class CartService {
   /**
    * Get an enriched view of the cart for the API.
    */
-  async getCart(userId) {
-    const cartItems = await this.repo.getCart(userId)
+  async getCart(userId, priceMode = 'retail') {
+    const mode = normalizePriceMode(priceMode)
+    const cartItems = await this.repo.getCart(userId, mode)
     if (cartItems.length === 0) {
-      return this._emptyEnriched(userId)
+      return this._emptyEnriched(userId, mode)
     }
-    return this._enrichCart(userId, cartItems)
+    return this._enrichCart(userId, cartItems, mode)
   }
 
   // ────────────────────────────────────────────────────────
@@ -260,7 +262,8 @@ export class CartService {
    * the shop when there is exactly one available shop for the product
    * across the user's allocations. Multiple shops → CART_SHOP_REQUIRED.
    */
-  async addItem(userId, { productId = null, shopId = null, shopProductId = null, quantity }) {
+  async addItem(userId, { productId = null, shopId = null, shopProductId = null, quantity, priceMode = 'retail' }) {
+    const mode = normalizePriceMode(priceMode)
     const qty = Number(quantity)
     if (!Number.isInteger(qty) || qty <= 0) {
       return {
@@ -299,7 +302,7 @@ export class CartService {
       }
     }
 
-    const cartItems = await this.repo.getCart(userId)
+    const cartItems = await this.repo.getCart(userId, mode)
     const existingIndex = cartItems.findIndex(
       (i) => i.productId === resolvedProductId && i.shopId === resolvedShopId
     )
@@ -370,7 +373,7 @@ export class CartService {
       })
     }
 
-    await this.repo.saveCart(userId, cartItems)
+    await this.repo.saveCart(userId, cartItems, mode)
     logger.info(
       {
         userId,
@@ -384,7 +387,7 @@ export class CartService {
     )
     await this._maybeMarkRecovered(userId)
 
-    return { success: true, cart: await this._enrichCart(userId, cartItems) }
+    return { success: true, cart: await this._enrichCart(userId, cartItems, mode) }
   }
 
   /**
@@ -396,7 +399,8 @@ export class CartService {
    * rejected with CART_ITEM_AMBIGUOUS so we never update sibling options
    * by accident.
    */
-  async updateItem(userId, productId, quantity, shopId = null, shopProductId = null) {
+  async updateItem(userId, productId, quantity, shopId = null, shopProductId = null, priceMode = 'retail') {
+    const mode = normalizePriceMode(priceMode)
     const qty = Number(quantity)
     if (!Number.isInteger(qty) || qty <= 0) {
       return {
@@ -440,7 +444,7 @@ export class CartService {
       resolvedShopId = spRow.shop_id
     }
 
-    const cartItems = await this.repo.getCart(userId)
+    const cartItems = await this.repo.getCart(userId, mode)
     const matches = cartItems
       .map((item, idx) => ({ item, idx }))
       .filter(({ item }) => {
@@ -470,7 +474,7 @@ export class CartService {
     )
     if (!sp) {
       cartItems.splice(idx, 1)
-      await this.repo.saveCart(userId, cartItems)
+      await this.repo.saveCart(userId, cartItems, mode)
       return {
         success: false,
         message: 'This shop is no longer available',
@@ -480,7 +484,7 @@ export class CartService {
 
     if (sp.shop_active !== true) {
       cartItems.splice(idx, 1)
-      await this.repo.saveCart(userId, cartItems)
+      await this.repo.saveCart(userId, cartItems, mode)
       return {
         success: false,
         message: 'This shop is currently inactive',
@@ -490,7 +494,7 @@ export class CartService {
 
     if (sp.product_active !== true || sp.is_available !== true) {
       cartItems.splice(idx, 1)
-      await this.repo.saveCart(userId, cartItems)
+      await this.repo.saveCart(userId, cartItems, mode)
       return {
         success: false,
         message: 'This product is currently unavailable',
@@ -537,10 +541,10 @@ export class CartService {
     }
 
     cartItems[idx].quantity = qty
-    await this.repo.saveCart(userId, cartItems)
+    await this.repo.saveCart(userId, cartItems, mode)
     await this._maybeMarkRecovered(userId)
 
-    return { success: true, cart: await this._enrichCart(userId, cartItems) }
+    return { success: true, cart: await this._enrichCart(userId, cartItems, mode) }
   }
 
   /**
@@ -548,7 +552,8 @@ export class CartService {
    * by the new optional `shopProductId`. Ambiguous matches are rejected
    * with CART_ITEM_AMBIGUOUS so sibling options are never deleted.
    */
-  async removeItem(userId, productId, shopId = null, shopProductId = null) {
+  async removeItem(userId, productId, shopId = null, shopProductId = null, priceMode = 'retail') {
+    const mode = normalizePriceMode(priceMode)
     let resolvedProductId = productId
     let resolvedShopId = shopId
     if (shopProductId) {
@@ -581,7 +586,7 @@ export class CartService {
       resolvedShopId = spRow.shop_id
     }
 
-    const cartItems = await this.repo.getCart(userId)
+    const cartItems = await this.repo.getCart(userId, mode)
     const matches = cartItems.filter((i) => {
       if (i.productId !== resolvedProductId) return false
       if (resolvedShopId && i.shopId !== resolvedShopId) return false
@@ -598,9 +603,9 @@ export class CartService {
       return false
     })
 
-    await this.repo.saveCart(userId, filtered)
+    await this.repo.saveCart(userId, filtered, mode)
     await this._maybeMarkRecovered(userId)
-    return { success: true, cart: await this._enrichCart(userId, filtered) }
+    return { success: true, cart: await this._enrichCart(userId, filtered, mode) }
   }
 
   /**
@@ -608,9 +613,10 @@ export class CartService {
    * Used by the checkout success path so post-order users do not see stale
    * carts (Requirement 5.6 — atomicity around checkout).
    */
-  async clearCart(userId) {
-    await this.repo.clearCart(userId)
-    await this.repo.clearExtras(userId)
+  async clearCart(userId, priceMode = 'retail') {
+    const mode = normalizePriceMode(priceMode)
+    await this.repo.clearCart(userId, mode)
+    await this.repo.clearExtras(userId, mode)
   }
 
   // ────────────────────────────────────────────────────────
@@ -626,8 +632,9 @@ export class CartService {
    * The cart in Redis is rewritten with only the validated items so a
    * subsequent retry by the customer reflects the current reality.
    */
-  async validateCart(userId) {
-    const cartItems = await this.repo.getCart(userId)
+  async validateCart(userId, priceMode = 'retail') {
+    const mode = normalizePriceMode(priceMode)
+    const cartItems = await this.repo.getCart(userId, mode)
     if (cartItems.length === 0) {
       return {
         valid: false,
@@ -742,11 +749,11 @@ export class CartService {
         continue
       }
 
-      const effective = this._effectivePrice(sp)
+      const effective = this._effectivePrice(sp, mode)
       const lineTotal = parseFloat((effective * item.quantity).toFixed(2))
       subtotal += lineTotal
 
-      validItems.push(this._formatLine(sp, item, effective, lineTotal))
+      validItems.push(this._formatLine(sp, item, effective, lineTotal, mode))
     }
 
     // Persist validated items back to Redis (drops failed entries so the
@@ -757,7 +764,8 @@ export class CartService {
         productId: i.productId,
         shopId: i.shopId,
         quantity: i.quantity,
-      }))
+      })),
+      mode
     )
 
     const groupedByShop = new Map()
@@ -781,10 +789,10 @@ export class CartService {
   // Helpers
   // ────────────────────────────────────────────────────────
 
-  async _emptyEnriched(userId) {
+  async _emptyEnriched(userId, priceMode = 'retail') {
     const [tipAmount, deliveryInstructions] = await Promise.all([
-      this.repo.getTip(userId),
-      this.repo.getInstructions(userId),
+      this.repo.getTip(userId, priceMode),
+      this.repo.getInstructions(userId, priceMode),
     ])
     return {
       items: [],
@@ -794,18 +802,19 @@ export class CartService {
       totalSavings: 0,
       tipAmount,
       deliveryInstructions,
+      priceMode,
       shopGroups: [],
     }
   }
 
   /** Enrich raw cart items with current product data for display. */
-  async _enrichCart(userId, cartItems) {
-    if (cartItems.length === 0) return this._emptyEnriched(userId)
+  async _enrichCart(userId, cartItems, priceMode = 'retail') {
+    if (cartItems.length === 0) return this._emptyEnriched(userId, priceMode)
 
     const [rows, tipAmount, deliveryInstructions] = await Promise.all([
       this.repo.findShopProductsForCart(userId, cartItems),
-      this.repo.getTip(userId),
-      this.repo.getInstructions(userId),
+      this.repo.getTip(userId, priceMode),
+      this.repo.getInstructions(userId, priceMode),
     ])
     const byKey = new Map(
       rows.map((r) => [`${r.product_id}:${r.shop_id}`, r])
@@ -824,8 +833,8 @@ export class CartService {
       // price set for this listing must never display the master price.
       if (sp.sp_price === null || sp.sp_price === undefined) continue
 
-      const effective = this._effectivePrice(sp)
-      const listPrice = this._listPrice(sp)
+      const effective = this._effectivePrice(sp, priceMode)
+      const listPrice = this._listPrice(sp, priceMode)
       const lineTotal = parseFloat((effective * item.quantity).toFixed(2))
 
       // A line can go out of stock (or get manually delisted) after it was
@@ -843,7 +852,7 @@ export class CartService {
         totalMrp += listPrice * item.quantity
       }
 
-      items.push(this._formatLine(sp, item, effective, lineTotal))
+      items.push(this._formatLine(sp, item, effective, lineTotal, priceMode))
     }
 
     // Only fulfillable items count toward per-shop fee computation and
@@ -882,11 +891,16 @@ export class CartService {
       totalSavings: parseFloat((normalizedMrp - normalizedSubtotal).toFixed(2)),
       tipAmount,
       deliveryInstructions,
+      priceMode,
       shopGroups,
     }
   }
 
-  _effectivePrice(sp) {
+  _effectivePrice(sp, priceMode = 'retail') {
+    if (priceMode === 'wholesale') {
+      const wholesale = Number(sp.sp_wholesale_price)
+      if (Number.isFinite(wholesale) && wholesale > 0) return wholesale
+    }
     // shop-level override first, falling back to master catalog
     const sale = sp.sp_sale_price ?? sp.product_sale_price
     const list = sp.sp_price ?? sp.product_price
@@ -895,15 +909,21 @@ export class CartService {
     return Number.isFinite(num) ? num : 0
   }
 
-  _listPrice(sp) {
+  _listPrice(sp, priceMode = 'retail') {
+    if (priceMode === 'wholesale') {
+      const wholesale = Number(sp.sp_wholesale_price)
+      if (Number.isFinite(wholesale) && wholesale > 0) return wholesale
+    }
     const list = sp.sp_price ?? sp.product_price
     const num = Number(list)
     return Number.isFinite(num) ? num : 0
   }
 
-  _formatLine(sp, item, effective, lineTotal) {
-    const listPrice = this._listPrice(sp)
-    const sale = sp.sp_sale_price ?? sp.product_sale_price
+  _formatLine(sp, item, effective, lineTotal, priceMode = 'retail') {
+    const listPrice = this._listPrice(sp, priceMode)
+    const sale = priceMode === 'wholesale'
+      ? null
+      : sp.sp_sale_price ?? sp.product_sale_price
     const salePrice = sale !== null && sale !== undefined ? Number(sale) : null
     const effectivePrice = Number(effective) || 0
 

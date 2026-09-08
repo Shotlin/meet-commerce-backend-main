@@ -1,9 +1,9 @@
-import Fastify from 'fastify'
-import { env } from './config/env.js'
-import { query } from './config/database.js'
-import { redis } from './config/redis.js'
-import { sanitize } from './middlewares/sanitize.js'
-import { installRouteCollector } from './utils/permission-audit.js'
+import Fastify from "fastify";
+import { env } from "./config/env.js";
+import { query } from "./config/database.js";
+import { redis } from "./config/redis.js";
+import { sanitize } from "./middlewares/sanitize.js";
+import { installRouteCollector } from "./utils/permission-audit.js";
 
 /**
  * Build and configure the Fastify application
@@ -15,11 +15,11 @@ export const buildApp = async () => {
       level: env.LOG_LEVEL,
       ...(env.LOG_PRETTY && {
         transport: {
-          target: 'pino-pretty',
+          target: "pino-pretty",
           options: {
             colorize: true,
-            translateTime: 'SYS:HH:MM:ss',
-            ignore: 'pid,hostname',
+            translateTime: "SYS:HH:MM:ss",
+            ignore: "pid,hostname",
           },
         },
       }),
@@ -27,27 +27,27 @@ export const buildApp = async () => {
     trustProxy: true,
     ajv: {
       customOptions: {
-        removeAdditional: 'all',
+        removeAdditional: "all",
         useDefaults: true,
-        coerceTypes: 'array',
+        coerceTypes: "array",
       },
     },
-  })
+  });
 
   // ─── PLUGINS (order matters) ────────────────────────────
-  await app.register(import('./plugins/errorHandler.plugin.js'))
-  await app.register(import('./plugins/cors.plugin.js'))
-  await app.register(import('./plugins/helmet.plugin.js'))
-  await app.register(import('./plugins/rateLimit.plugin.js'))
-  await app.register(import('./plugins/auth.plugin.js'))
-  await app.register(import('./plugins/swagger.plugin.js'))
-  await app.register(import('./plugins/multipart.plugin.js'))
-  if (process.env.DISABLE_SOCKETIO !== 'true') {
-    await app.register(import('./plugins/socketio.plugin.js'))
+  await app.register(import("./plugins/errorHandler.plugin.js"));
+  await app.register(import("./plugins/cors.plugin.js"));
+  await app.register(import("./plugins/helmet.plugin.js"));
+  await app.register(import("./plugins/rateLimit.plugin.js"));
+  await app.register(import("./plugins/auth.plugin.js"));
+  await app.register(import("./plugins/swagger.plugin.js"));
+  await app.register(import("./plugins/multipart.plugin.js"));
+  if (process.env.DISABLE_SOCKETIO !== "true") {
+    await app.register(import("./plugins/socketio.plugin.js"));
   }
 
   // ─── GLOBAL HOOKS ──────────────────────────────────────
-  app.addHook('onRequest', sanitize)
+  app.addHook("onRequest", sanitize);
 
   // PHASE 7 FIX (mobile-network stale-UI bug):
   // Never allow an intermediary (Cloudflare, a mobile-carrier transparent
@@ -62,238 +62,262 @@ export const buildApp = async () => {
   // Anonymous public responses (master catalog, theme, banners) are left
   // untouched so their existing ETag/Cache-Control behaviour and
   // Cloudflare edge caching keep working.
-  app.addHook('onSend', async (request, reply, payload) => {
+  app.addHook("onSend", async (request, reply, payload) => {
     if (request.user && request.user.id) {
       reply.header(
-        'Cache-Control',
-        'no-store, no-cache, must-revalidate, private'
-      )
-      reply.header('Pragma', 'no-cache')
-      reply.header('Expires', '0')
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate, private",
+      );
+      reply.header("Pragma", "no-cache");
+      reply.header("Expires", "0");
     }
-    return payload
-  })
+    return payload;
+  });
 
   // ─── PERMISSION AUDIT ROUTE COLLECTOR (R17 AC#9, design §4.5) ────
   // Install BEFORE any module routes register so the `onRoute` hook fires
   // for every dashboard endpoint. The collected array is exposed via
   // `app.permissionAuditRoutes` so `src/server.js` can run the audit
   // after `app.ready()` and decide whether to abort boot per task 2.7.
-  app.decorate('permissionAuditRoutes', installRouteCollector(app))
+  app.decorate("permissionAuditRoutes", installRouteCollector(app));
 
   // ─── MODULE ROUTES ─────────────────────────────────────
 
   // Auth — fully implemented
-  await app.register(import('./modules/auth/auth.routes.js'), {
-    prefix: '/api/v1/auth',
-  })
+  await app.register(import("./modules/auth/auth.routes.js"), {
+    prefix: "/api/v1/auth",
+  });
 
   // Users — fully implemented
-  await app.register(import('./modules/users/users.routes.js'), {
-    prefix: '/api/v1/users',
-  })
+  await app.register(import("./modules/users/users.routes.js"), {
+    prefix: "/api/v1/users",
+  });
 
   // Categories — fully implemented
-  await app.register(import('./modules/categories/categories.routes.js'), {
-    prefix: '/api/v1/categories',
-  })
+  await app.register(import("./modules/categories/categories.routes.js"), {
+    prefix: "/api/v1/categories",
+  });
 
   // Products — fully implemented
-  await app.register(import('./modules/products/products.routes.js'), {
-    prefix: '/api/v1/products',
-  })
+  await app.register(import("./modules/products/products.routes.js"), {
+    prefix: "/api/v1/products",
+  });
   // URL alias fix — Flutter mobile app has a doubled /api/v1/ prefix bug
   // where it constructs product URLs as /api/v1/api/v1/products/:id instead
   // of /api/v1/products/:id. This alias transparently handles those requests
   // so products load correctly without requiring a mobile app release.
-  await app.register(import('./modules/products/products.routes.js'), {
-    prefix: '/api/v1/api/v1/products',
-  })
+  await app.register(import("./modules/products/products.routes.js"), {
+    prefix: "/api/v1/api/v1/products",
+  });
+
+  // Guest location verification. It creates a signed device storefront
+  // session only; no guest account/address is written to the database.
+  await app.register(import("./modules/storefront/storefront.routes.js"), {
+    prefix: "/api/v1/storefront",
+  });
 
   // Uploads — fully implemented
-  await app.register(import('./modules/uploads/uploads.routes.js'), {
-    prefix: '/api/v1/uploads',
-  })
+  await app.register(import("./modules/uploads/uploads.routes.js"), {
+    prefix: "/api/v1/uploads",
+  });
 
   // Cart — fully implemented
-  await app.register(import('./modules/cart/cart.routes.js'), {
-    prefix: '/api/v1/cart',
-  })
+  await app.register(import("./modules/cart/cart.routes.js"), {
+    prefix: "/api/v1/cart",
+  });
 
   // Orders — fully implemented
-  await app.register(import('./modules/orders/orders.routes.js'), {
-    prefix: '/api/v1/orders',
-  })
+  await app.register(import("./modules/orders/orders.routes.js"), {
+    prefix: "/api/v1/orders",
+  });
 
   // Vendors — Phase 2 Subsystem
-  await app.register(import('./modules/vendors/vendors.routes.js'), {
-    prefix: '/api/v1/vendors',
-  })
+  await app.register(import("./modules/vendors/vendors.routes.js"), {
+    prefix: "/api/v1/vendors",
+  });
 
   // Vendor KYC — Phase 2 Subsystem
-  await app.register(import('./modules/vendors/vendor-kyc.routes.js'), {
-    prefix: '/api/v1/vendor-kyc',
-  })
+  await app.register(import("./modules/vendors/vendor-kyc.routes.js"), {
+    prefix: "/api/v1/vendor-kyc",
+  });
 
   // Vendor Staff — Phase 2 Subsystem
-  await app.register(import('./modules/vendors/vendor-staff.routes.js'), {
-    prefix: '/api/v1/vendor-staff',
-  })
+  await app.register(import("./modules/vendors/vendor-staff.routes.js"), {
+    prefix: "/api/v1/vendor-staff",
+  });
 
   // Catalogue & Product Proposals — Phase 3 Subsystem
-  await app.register(import('./modules/catalogue/catalogue.routes.js'), {
-    prefix: '/api/v1/catalogue',
-  })
-  await app.register(import('./modules/catalogue/proposal-media.routes.js'), {
-    prefix: '/api/v1/catalogue',
-  })
+  await app.register(import("./modules/catalogue/catalogue.routes.js"), {
+    prefix: "/api/v1/catalogue",
+  });
+  await app.register(import("./modules/catalogue/proposal-media.routes.js"), {
+    prefix: "/api/v1/catalogue",
+  });
 
   // Procurement — Phase 4 Subsystem
-  await app.register(import('./modules/procurement/procurement.routes.js'), {
-    prefix: '/api/v1/procurement',
-  })
+  await app.register(import("./modules/procurement/procurement.routes.js"), {
+    prefix: "/api/v1/procurement",
+  });
 
   // Warehouse Receipts & Quality Control — Phase 5 Subsystem
-  await app.register(import('./modules/warehouse-receipts/warehouse-receipts.routes.js'), {
-    prefix: '/api/v1/warehouse-receipts',
-  })
+  await app.register(
+    import("./modules/warehouse-receipts/warehouse-receipts.routes.js"),
+    {
+      prefix: "/api/v1/warehouse-receipts",
+    },
+  );
 
   // Lot Inventory & FEFO Allocation — Phase 6 Subsystem
-  await app.register(import('./modules/inventory/inventory.routes.js'), {
-    prefix: '/api/v1/inventory',
-  })
+  await app.register(import("./modules/inventory/inventory.routes.js"), {
+    prefix: "/api/v1/inventory",
+  });
 
   // Cart, Loyalty & Quote Engine — Phase 7 Subsystem
-  await app.register(import('./modules/cart-quote/cart-quote.routes.js'), {
-    prefix: '/api/v1/cart-quote',
-  })
+  await app.register(import("./modules/cart-quote/cart-quote.routes.js"), {
+    prefix: "/api/v1/cart-quote",
+  });
 
   // Rider Shifts & Deliveries Adaptation — Phase 9 Subsystem
-  await app.register(import('./modules/deliveries/deliveries.routes.js'), {
-    prefix: '/api/v1/deliveries',
-  })
+  await app.register(import("./modules/deliveries/deliveries.routes.js"), {
+    prefix: "/api/v1/deliveries",
+  });
 
   // Support Tickets, Recalls & Traceability — Phase 10 Subsystem
-  await app.register(import('./modules/support/support.routes.js'), {
-    prefix: '/api/v1/support',
-  })
+  await app.register(import("./modules/support/support.routes.js"), {
+    prefix: "/api/v1/support",
+  });
 
   // Admin Reports & Dashboards — Phase 11 Subsystem
-  await app.register(import('./modules/reports/reports.routes.js'), {
-    prefix: '/api/v1/reports',
-  })
+  await app.register(import("./modules/reports/reports.routes.js"), {
+    prefix: "/api/v1/reports",
+  });
 
   // Payments — fully implemented
-  await app.register(import('./modules/payments/payments.routes.js'), {
-    prefix: '/api/v1/payments',
-  })
+  await app.register(import("./modules/payments/payments.routes.js"), {
+    prefix: "/api/v1/payments",
+  });
 
   // Wallet — fully implemented
-  await app.register(import('./modules/wallet/wallet.routes.js'), {
-    prefix: '/api/v1/wallet',
-  })
+  await app.register(import("./modules/wallet/wallet.routes.js"), {
+    prefix: "/api/v1/wallet",
+  });
 
   // Coupons — fully implemented
-  await app.register(import('./modules/coupons/coupons.routes.js'), {
-    prefix: '/api/v1/coupons',
-  })
+  await app.register(import("./modules/coupons/coupons.routes.js"), {
+    prefix: "/api/v1/coupons",
+  });
 
   // First-Time Offers — Phase 2 of the customer-segment marketing system
-  await app.register(import('./modules/first-time-offers/first-time-offers.routes.js'), {
-    prefix: '/api/v1/first-time-offers',
-  })
+  await app.register(
+    import("./modules/first-time-offers/first-time-offers.routes.js"),
+    {
+      prefix: "/api/v1/first-time-offers",
+    },
+  );
 
   // Cart Milestones — Phase 3 of the customer-segment marketing system
-  await app.register(import('./modules/cart-milestones/cart-milestones.routes.js'), {
-    prefix: '/api/v1/cart-milestones',
-  })
+  await app.register(
+    import("./modules/cart-milestones/cart-milestones.routes.js"),
+    {
+      prefix: "/api/v1/cart-milestones",
+    },
+  );
 
   // Purchase Limits — admin-configured per-category/per-product order and
   // rolling-window purchase caps (anti-abuse, independent of coupons)
-  await app.register(import('./modules/purchase-limits/purchase-limits.routes.js'), {
-    prefix: '/api/v1/purchase-limits',
-  })
+  await app.register(
+    import("./modules/purchase-limits/purchase-limits.routes.js"),
+    {
+      prefix: "/api/v1/purchase-limits",
+    },
+  );
 
   // Addresses — fully implemented
-  await app.register(import('./modules/addresses/addresses.routes.js'), {
-    prefix: '/api/v1/addresses',
-  })
+  await app.register(import("./modules/addresses/addresses.routes.js"), {
+    prefix: "/api/v1/addresses",
+  });
 
   // Ola Maps — Beta/test module, proxies maps.olakrutrim.com so the API
   // key stays server-side (see src/modules/ola-maps)
-  await app.register(import('./modules/ola-maps/ola-maps.routes.js'), {
-    prefix: '/api/v1/maps/ola',
-  })
+  await app.register(import("./modules/ola-maps/ola-maps.routes.js"), {
+    prefix: "/api/v1/maps/ola",
+  });
 
   // Ola Maps settings [ADMIN] — dashboard-managed key (paste, test, save),
   // source of truth for the module above (see src/modules/ola-maps-settings)
-  await app.register(import('./modules/ola-maps-settings/ola-maps-settings.routes.js'), {
-    prefix: '/api/v1/admin/ola-maps-settings',
-  })
+  await app.register(
+    import("./modules/ola-maps-settings/ola-maps-settings.routes.js"),
+    {
+      prefix: "/api/v1/admin/ola-maps-settings",
+    },
+  );
 
   // Admin — fully implemented
-  await app.register(import('./modules/admin/admin.routes.js'), {
-    prefix: '/api/v1/admin',
-  })
+  await app.register(import("./modules/admin/admin.routes.js"), {
+    prefix: "/api/v1/admin",
+  });
 
   // Banners (public) — active banners for mobile/web
-  await app.register(import('./modules/banners/banners.routes.js'), {
-    prefix: '/api/v1/banners',
-  })
+  await app.register(import("./modules/banners/banners.routes.js"), {
+    prefix: "/api/v1/banners",
+  });
 
   // Tutorials (public) — active in-app tutorial videos for mobile/web
-  await app.register(import('./modules/tutorials/tutorials.routes.js'), {
-    prefix: '/api/v1/tutorials',
-  })
+  await app.register(import("./modules/tutorials/tutorials.routes.js"), {
+    prefix: "/api/v1/tutorials",
+  });
 
   // Theme (public) — active theme for mobile/web app
-  await app.register(import('./modules/themes/public.routes.js'), {
-    prefix: '/api/v1/theme',
-  })
+  await app.register(import("./modules/themes/public.routes.js"), {
+    prefix: "/api/v1/theme",
+  });
 
   // Wishlist — fully implemented
-  await app.register(import('./modules/wishlist/wishlist.routes.js'), {
-    prefix: '/api/v1/wishlist',
-  })
+  await app.register(import("./modules/wishlist/wishlist.routes.js"), {
+    prefix: "/api/v1/wishlist",
+  });
 
   // Reviews — fully implemented
-  await app.register(import('./modules/reviews/reviews.routes.js'), {
-    prefix: '/api/v1/reviews',
-  })
+  await app.register(import("./modules/reviews/reviews.routes.js"), {
+    prefix: "/api/v1/reviews",
+  });
 
   // Delivery — fully implemented
-  await app.register(import('./modules/delivery/delivery.routes.js'), {
-    prefix: '/api/v1/delivery',
-  })
+  await app.register(import("./modules/delivery/delivery.routes.js"), {
+    prefix: "/api/v1/delivery",
+  });
 
   // Delivery Slots — admin-managed calendar (replaces the old hardcoded
   // orders/delivery-slots.routes.js generator, same path/response shape).
-  const { publicDeliveryCalendarRoutes } = await import('./modules/delivery-calendar/delivery-calendar.routes.js')
+  const { publicDeliveryCalendarRoutes } =
+    await import("./modules/delivery-calendar/delivery-calendar.routes.js");
   await app.register(publicDeliveryCalendarRoutes, {
-    prefix: '/api/v1/delivery',
-  })
+    prefix: "/api/v1/delivery",
+  });
 
   // Store Status (public) — is the storefront currently open
-  const { publicStoreStatusRoutes } = await import('./modules/store-status/store-status.routes.js')
+  const { publicStoreStatusRoutes } =
+    await import("./modules/store-status/store-status.routes.js");
   await app.register(publicStoreStatusRoutes, {
-    prefix: '/api/v1/store',
-  })
+    prefix: "/api/v1/store",
+  });
 
   // App Version (public) — force/soft update check, no auth (runs before login)
-  const { publicAppVersionRoutes } = await import('./modules/app-version/app-version.routes.js')
+  const { publicAppVersionRoutes } =
+    await import("./modules/app-version/app-version.routes.js");
   await app.register(publicAppVersionRoutes, {
-    prefix: '/api/v1/app',
-  })
+    prefix: "/api/v1/app",
+  });
 
   // Shops — multi-vendor system
-  await app.register(import('./modules/shops/shops.routes.js'), {
-    prefix: '/api/v1/shops',
-  })
+  await app.register(import("./modules/shops/shops.routes.js"), {
+    prefix: "/api/v1/shops",
+  });
 
   // Shop Staff — role-based access management
-  await app.register(import('./modules/shop-staff/shop-staff.routes.js'), {
-    prefix: '/api/v1/shop-staff',
-  })
+  await app.register(import("./modules/shop-staff/shop-staff.routes.js"), {
+    prefix: "/api/v1/shop-staff",
+  });
 
   // Alias mount at /shops/:shopId/staff so the dashboard's canonical URL
   // pattern (see bakaloo-dashboard/src/services/shop-staff.service.ts and
@@ -301,14 +325,17 @@ export const buildApp = async () => {
   // layer. The controller's resolveShopId() prefers `request.params.shopId`
   // when present, so all role-check + scope semantics stay identical to the
   // /shop-staff prefix; this is a pure URL alias, not a behavioural fork.
-  await app.register(import('./modules/shop-staff/shop-staff.routes.js'), {
-    prefix: '/api/v1/shops/:shopId/staff',
-  })
+  await app.register(import("./modules/shop-staff/shop-staff.routes.js"), {
+    prefix: "/api/v1/shops/:shopId/staff",
+  });
 
   // Shop Products — per-shop inventory and pricing
-  await app.register(import('./modules/shop-products/shop-products.routes.js'), {
-    prefix: '/api/v1/shop-products',
-  })
+  await app.register(
+    import("./modules/shop-products/shop-products.routes.js"),
+    {
+      prefix: "/api/v1/shop-products",
+    },
+  );
 
   // Shop Products — nested per-shop write surface (R23.8, R23.12)
   // adjust-stock + bulk-price-update mounted at /api/v1/shops/:shopId/products
@@ -317,130 +344,130 @@ export const buildApp = async () => {
   // as the /api/v1/shop-products mount; permission gating lives on each
   // route via requirePermission().
   {
-    const { shopProductsNestedRoutes, shopStockMovementsRoutes, shopProductsAdminRoutes } =
-      await import('./modules/shop-products/shop-products.routes.js')
+    const {
+      shopProductsNestedRoutes,
+      shopStockMovementsRoutes,
+      shopProductsAdminRoutes,
+    } = await import("./modules/shop-products/shop-products.routes.js");
     await app.register(shopProductsNestedRoutes, {
-      prefix: '/api/v1/shops/:shopId/products',
-    })
+      prefix: "/api/v1/shops/:shopId/products",
+    });
     // Stock-movements ledger reader (R23.5)
     await app.register(shopStockMovementsRoutes, {
-      prefix: '/api/v1/shops/:shopId/stock-movements',
-    })
+      prefix: "/api/v1/shops/:shopId/stock-movements",
+    });
     // HQ-only admin approve/reject (R23.10, R23.11) — feature-flagged
     await app.register(shopProductsAdminRoutes, {
-      prefix: '/api/v1/admin/shop-products',
-    })
+      prefix: "/api/v1/admin/shop-products",
+    });
   }
 
   // Shop Orders — store-scoped order operations (multi-vendor R22)
-  await app.register(import('./modules/shop-orders/routes.js'), {
-    prefix: '/api/v1/shop-orders',
-  })
+  await app.register(import("./modules/shop-orders/routes.js"), {
+    prefix: "/api/v1/shop-orders",
+  });
 
   // Shop Transactions — read-only append-only ledger
   // (write side is exposed as LedgerWriteService for orders/refunds/payouts)
   await app.register(
-    import('./modules/shop-transactions/shop-transactions.routes.js'),
+    import("./modules/shop-transactions/shop-transactions.routes.js"),
     {
-      prefix: '/api/v1/shop-transactions',
-    }
-  )
+      prefix: "/api/v1/shop-transactions",
+    },
+  );
 
   // Product Families — option grouping for multi-option products
-  await app.register(import('./modules/product-families/product-families.routes.js'), {
-    prefix: '/api/v1/admin/product-families',
-  })
+  await app.register(
+    import("./modules/product-families/product-families.routes.js"),
+    {
+      prefix: "/api/v1/admin/product-families",
+    },
+  );
 
   // Allocation — user-shop allocation (pincode + haversine)
-  await app.register(import('./modules/allocation/allocation.routes.js'), {
-    prefix: '/api/v1/allocation',
-  })
+  await app.register(import("./modules/allocation/allocation.routes.js"), {
+    prefix: "/api/v1/allocation",
+  });
 
   // Shop Financials — read-only paginated financials per period
   await app.register(
-    import('./modules/shop-financials/shop-financials.routes.js'),
+    import("./modules/shop-financials/shop-financials.routes.js"),
     {
-      prefix: '/api/v1/shop-financials',
-    }
-  )
+      prefix: "/api/v1/shop-financials",
+    },
+  );
 
   // Shop Finance — store-scoped finance endpoints (task 8.8)
-  await app.register(
-    import('./modules/shop-finance/routes.js'),
-    {
-      prefix: '/api/v1/shop-finance',
-    }
-  )
+  await app.register(import("./modules/shop-finance/routes.js"), {
+    prefix: "/api/v1/shop-finance",
+  });
 
   // Admin Finance — HQ-scoped finance endpoints (task 8.9)
-  await app.register(
-    import('./modules/admin/finance/routes.js'),
-    {
-      prefix: '/api/v1/admin/finance',
-    }
-  )
+  await app.register(import("./modules/admin/finance/routes.js"), {
+    prefix: "/api/v1/admin/finance",
+  });
 
   // Bulk Orders — large multi-vendor scheduled-delivery orders
   // (registered after shop-financials; scheduled-orders comes online in 10.2)
-  await app.register(import('./modules/bulk-orders/bulk-orders.routes.js'), {
-    prefix: '/api/v1/bulk-orders',
-  })
+  await app.register(import("./modules/bulk-orders/bulk-orders.routes.js"), {
+    prefix: "/api/v1/bulk-orders",
+  });
 
   // Scheduled Orders — customer-side future / recurring orders (task 10.2)
   // (Worker that fires the orders at scheduled_for lives in task 10.3.)
   await app.register(
-    import('./modules/scheduled-orders/scheduled-orders.routes.js'),
+    import("./modules/scheduled-orders/scheduled-orders.routes.js"),
     {
-      prefix: '/api/v1/scheduled-orders',
-    }
-  )
+      prefix: "/api/v1/scheduled-orders",
+    },
+  );
 
   // Audit Logs — read-only endpoints (tasks 10.2, 10.3)
   {
     const { adminAuditLogsRoutes, shopAuditLogsRoutes } =
-      await import('./modules/audit-logs/audit-logs.routes.js')
+      await import("./modules/audit-logs/audit-logs.routes.js");
     // HQ-only reader (task 10.2)
     await app.register(adminAuditLogsRoutes, {
-      prefix: '/api/v1/admin/audit-logs',
-    })
+      prefix: "/api/v1/admin/audit-logs",
+    });
     // Shop-scoped reader (task 10.3)
     await app.register(shopAuditLogsRoutes, {
-      prefix: '/api/v1/shop-audit-logs',
-    })
+      prefix: "/api/v1/shop-audit-logs",
+    });
   }
 
   // Admin Reports — HQ-scoped global reports (task 11.1)
-  await app.register(
-    import('./modules/admin/reports/routes.js'),
-    {
-      prefix: '/api/v1/admin/reports',
-    }
-  )
+  await app.register(import("./modules/admin/reports/routes.js"), {
+    prefix: "/api/v1/admin/reports",
+  });
 
   // Shop Reports — shop-scoped reports (task 11.2)
-  await app.register(
-    import('./modules/shop-reports/routes.js'),
-    {
-      prefix: '/api/v1/shop-reports',
-    }
-  )
+  await app.register(import("./modules/shop-reports/routes.js"), {
+    prefix: "/api/v1/shop-reports",
+  });
 
   // Notifications — fully implemented
-  await app.register(import('./modules/notifications/notifications.routes.js'), {
-    prefix: '/api/v1/notifications',
-  })
+  await app.register(
+    import("./modules/notifications/notifications.routes.js"),
+    {
+      prefix: "/api/v1/notifications",
+    },
+  );
 
   // ─── CART ENHANCEMENT MODULES ──────────────────────────
 
   // Tip Presets (public)
-  await app.register(import('./modules/tip-presets/tip-presets.routes.js'), {
-    prefix: '/api/v1/tip-presets',
-  })
+  await app.register(import("./modules/tip-presets/tip-presets.routes.js"), {
+    prefix: "/api/v1/tip-presets",
+  });
 
   // Payment Offers (public)
-  await app.register(import('./modules/payment-offers/payment-offers.routes.js'), {
-    prefix: '/api/v1/payment-offers',
-  })
+  await app.register(
+    import("./modules/payment-offers/payment-offers.routes.js"),
+    {
+      prefix: "/api/v1/payment-offers",
+    },
+  );
 
   // NOTE: the legacy row-per-type "Fee Config" admin API (/api/v1/admin/fee-config,
   // module at src/modules/fee-config/) has been retired (2026-07-02). It was never
@@ -450,184 +477,223 @@ export const buildApp = async () => {
   // See migration 065_cleanup_dead_settings_and_cod_fix.sql.
 
   // Fee Settings (admin) — canonical dynamic fee + distance-based delivery engine
-  await app.register(import('./modules/fee-settings/fee-settings.routes.js'), {
-    prefix: '/api/v1/admin/fee-settings',
-  })
+  await app.register(import("./modules/fee-settings/fee-settings.routes.js"), {
+    prefix: "/api/v1/admin/fee-settings",
+  });
 
   // Pincode Mappings (admin) — curated pincode -> city/area/state overrides,
   // consumed by /api/v1/addresses/validate-pincode
-  await app.register(import('./modules/pincode-mappings/pincode-mappings.routes.js'), {
-    prefix: '/api/v1/admin/pincode-mappings',
-  })
+  await app.register(
+    import("./modules/pincode-mappings/pincode-mappings.routes.js"),
+    {
+      prefix: "/api/v1/admin/pincode-mappings",
+    },
+  );
 
   // Coverage Map (admin) — per-shop customer coverage: store pin, pincode
   // boundary shapes, and every covered customer's pin
-  await app.register(import('./modules/coverage-map/coverage-map.routes.js'), {
-    prefix: '/api/v1/admin/coverage-map',
-  })
+  await app.register(import("./modules/coverage-map/coverage-map.routes.js"), {
+    prefix: "/api/v1/admin/coverage-map",
+  });
 
   // Store Status (admin) — manual open/closed override + weekly hours
-  const { adminStoreStatusRoutes } = await import('./modules/store-status/store-status.routes.js')
+  const { adminStoreStatusRoutes } =
+    await import("./modules/store-status/store-status.routes.js");
   await app.register(adminStoreStatusRoutes, {
-    prefix: '/api/v1/admin/store-status',
-  })
+    prefix: "/api/v1/admin/store-status",
+  });
 
   // App Version (admin) — set min/latest supported build per platform
-  const { adminAppVersionRoutes } = await import('./modules/app-version/app-version.routes.js')
+  const { adminAppVersionRoutes } =
+    await import("./modules/app-version/app-version.routes.js");
   await app.register(adminAppVersionRoutes, {
-    prefix: '/api/v1/admin/app-versions',
-  })
+    prefix: "/api/v1/admin/app-versions",
+  });
 
   // Delivery Calendar (admin) — weekly template + per-date overrides
-  const { adminDeliveryCalendarRoutes } = await import('./modules/delivery-calendar/delivery-calendar.routes.js')
+  const { adminDeliveryCalendarRoutes } =
+    await import("./modules/delivery-calendar/delivery-calendar.routes.js");
   await app.register(adminDeliveryCalendarRoutes, {
-    prefix: '/api/v1/admin/delivery-calendar',
-  })
+    prefix: "/api/v1/admin/delivery-calendar",
+  });
 
   // Wallet Settings (admin) — max wallet balance + transfer amount limits
-  await app.register(import('./modules/wallet-settings/wallet-settings.routes.js'), {
-    prefix: '/api/v1/admin/wallet-settings',
-  })
+  await app.register(
+    import("./modules/wallet-settings/wallet-settings.routes.js"),
+    {
+      prefix: "/api/v1/admin/wallet-settings",
+    },
+  );
 
   // Product Suggestions (admin) — category-to-category "Pair With" mapping
-  await app.register(import('./modules/product-suggestions/product-suggestions.routes.js'), {
-    prefix: '/api/v1/admin/product-suggestions',
-  })
+  await app.register(
+    import("./modules/product-suggestions/product-suggestions.routes.js"),
+    {
+      prefix: "/api/v1/admin/product-suggestions",
+    },
+  );
 
   // Tip Presets (admin)
-  const { adminTipPresetsRoutes } = await import('./modules/tip-presets/tip-presets.routes.js')
+  const { adminTipPresetsRoutes } =
+    await import("./modules/tip-presets/tip-presets.routes.js");
   await app.register(adminTipPresetsRoutes, {
-    prefix: '/api/v1/admin/tip-presets',
-  })
+    prefix: "/api/v1/admin/tip-presets",
+  });
 
   // Payment Offers (admin)
-  const { adminPaymentOffersRoutes } = await import('./modules/payment-offers/payment-offers.routes.js')
+  const { adminPaymentOffersRoutes } =
+    await import("./modules/payment-offers/payment-offers.routes.js");
   await app.register(adminPaymentOffersRoutes, {
-    prefix: '/api/v1/admin/payment-offers',
-  })
+    prefix: "/api/v1/admin/payment-offers",
+  });
   // Note: admin banners (/api/v1/admin/banners) is already registered via
   // the admin.routes.js aggregator (modules/admin/admin.routes.js:83), not here.
 
   // ─── RAZORPAY WEBHOOK (outside /api/v1 — no auth, no rate-limit) ──
-  await app.register(async function razorpayWebhook(fastify) {
-    // Lazy-load payments dependencies only for this route
-    const { PaymentsRepository } = await import('./modules/payments/payments.repository.js')
-    const { PaymentsService } = await import('./modules/payments/payments.service.js')
-    const { PaymentsController } = await import('./modules/payments/payments.controller.js')
+  await app.register(
+    async function razorpayWebhook(fastify) {
+      // Lazy-load payments dependencies only for this route
+      const { PaymentsRepository } =
+        await import("./modules/payments/payments.repository.js");
+      const { PaymentsService } =
+        await import("./modules/payments/payments.service.js");
+      const { PaymentsController } =
+        await import("./modules/payments/payments.controller.js");
 
-    const repo = new PaymentsRepository()
-    const service = new PaymentsService(repo)
-    const controller = new PaymentsController(service)
+      const repo = new PaymentsRepository();
+      const service = new PaymentsService(repo);
+      const controller = new PaymentsController(service);
 
-    fastify.post('/razorpay', {
-      schema: {
-        tags: ['Payments'],
-        summary: 'Razorpay webhook handler',
-      },
-      config: {
-        rawBody: true,
-        rateLimit: false,   // Razorpay retries failed webhooks — don't rate-limit
-      },
-    }, controller.webhook.bind(controller))
-  }, { prefix: '/api/webhook' })
+      fastify.post(
+        "/razorpay",
+        {
+          schema: {
+            tags: ["Payments"],
+            summary: "Razorpay webhook handler",
+          },
+          config: {
+            rawBody: true,
+            rateLimit: false, // Razorpay retries failed webhooks — don't rate-limit
+          },
+        },
+        controller.webhook.bind(controller),
+      );
+    },
+    { prefix: "/api/webhook" },
+  );
 
   // ─── HEALTH CHECKS ─────────────────────────────────────
-  app.get('/', {
-    schema: {
-      tags: ['Health'],
-      summary: 'Root status endpoint',
-      response: {
-        200: {
-          type: 'object',
-          properties: {
-            status: { type: 'string' },
-            service: { type: 'string' },
-            timestamp: { type: 'string' },
-            uptime: { type: 'number' },
-            health: { type: 'string' },
+  app.get(
+    "/",
+    {
+      schema: {
+        tags: ["Health"],
+        summary: "Root status endpoint",
+        response: {
+          200: {
+            type: "object",
+            properties: {
+              status: { type: "string" },
+              service: { type: "string" },
+              timestamp: { type: "string" },
+              uptime: { type: "number" },
+              health: { type: "string" },
+            },
+          },
+        },
+      },
+      config: {
+        rateLimit: false,
+      },
+    },
+    async () => ({
+      status: "OK",
+      service: "bakaloo-backend",
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      health: "/health/ready",
+    }),
+  );
+
+  app.get(
+    "/health",
+    {
+      schema: {
+        tags: ["Health"],
+        summary: "Liveness health check",
+        response: {
+          200: {
+            type: "object",
+            properties: {
+              status: { type: "string" },
+              timestamp: { type: "string" },
+              uptime: { type: "number" },
+            },
           },
         },
       },
     },
-    config: {
-      rateLimit: false,
-    },
-  }, async () => ({
-    status: 'OK',
-    service: 'bakaloo-backend',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    health: '/health/ready',
-  }))
+    async () => ({
+      status: "OK",
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+    }),
+  );
 
-  app.get('/health', {
-    schema: {
-      tags: ['Health'],
-      summary: 'Liveness health check',
-      response: {
-        200: {
-          type: 'object',
-          properties: {
-            status: { type: 'string' },
-            timestamp: { type: 'string' },
-            uptime: { type: 'number' },
-          },
-        },
+  app.get(
+    "/health/ready",
+    {
+      schema: {
+        tags: ["Health"],
+        summary: "Readiness health check",
       },
     },
-  }, async () => ({
-    status: 'OK',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-  }))
+    async (request, reply) => {
+      const [postgresResult, redisResult] = await Promise.allSettled([
+        query("SELECT 1"),
+        redis.ping(),
+      ]);
 
-  app.get('/health/ready', {
-    schema: {
-      tags: ['Health'],
-      summary: 'Readiness health check',
-    },
-  }, async (request, reply) => {
-    const [postgresResult, redisResult] = await Promise.allSettled([
-      query('SELECT 1'),
-      redis.ping(),
-    ])
+      const dependencies = {
+        postgres:
+          postgresResult.status === "fulfilled"
+            ? { status: "up" }
+            : {
+                status: "down",
+                error:
+                  postgresResult.reason?.message || "Unknown PostgreSQL error",
+              },
+        redis:
+          redisResult.status === "fulfilled"
+            ? { status: "up" }
+            : {
+                status: "down",
+                error: redisResult.reason?.message || "Unknown Redis error",
+              },
+      };
 
-    const dependencies = {
-      postgres: postgresResult.status === 'fulfilled'
-        ? { status: 'up' }
-        : {
-            status: 'down',
-            error: postgresResult.reason?.message || 'Unknown PostgreSQL error',
-          },
-      redis: redisResult.status === 'fulfilled'
-        ? { status: 'up' }
-        : {
-            status: 'down',
-            error: redisResult.reason?.message || 'Unknown Redis error',
-          },
-    }
+      const ready = Object.values(dependencies).every(
+        (dependency) => dependency.status === "up",
+      );
 
-    const ready = Object.values(dependencies).every(
-      (dependency) => dependency.status === 'up'
-    )
+      if (!ready) {
+        request.log.error({ dependencies }, "Readiness check failed");
+        return reply.code(503).send({
+          status: "NOT_READY",
+          timestamp: new Date().toISOString(),
+          uptime: process.uptime(),
+          dependencies,
+        });
+      }
 
-    if (!ready) {
-      request.log.error({ dependencies }, 'Readiness check failed')
-      return reply.code(503).send({
-        status: 'NOT_READY',
+      return {
+        status: "READY",
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
         dependencies,
-      })
-    }
+      };
+    },
+  );
 
-    return {
-      status: 'READY',
-      timestamp: new Date().toISOString(),
-      uptime: process.uptime(),
-      dependencies,
-    }
-  })
-
-  return app
-}
+  return app;
+};

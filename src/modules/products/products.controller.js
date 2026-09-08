@@ -1,5 +1,5 @@
-import { success, error } from '../../utils/apiResponse.js'
-import { query } from '../../config/database.js'
+import { success, error } from "../../utils/apiResponse.js";
+import { query } from "../../config/database.js";
 
 /**
  * Build a customer scoping context from the authenticated request.
@@ -19,13 +19,30 @@ import { query } from '../../config/database.js'
  * @param {object} request
  * @returns {{ userId: string }|null}
  */
-export function resolveCustomerContext(request) {
-  const user = request?.user
-  if (!user || !user.id) return null
+export async function resolveCustomerContext(request) {
+  const user = request?.user;
+  if (!user || !user.id) {
+    const token = request.headers?.["x-storefront-token"];
+    if (!token || typeof token !== "string") return { shopIds: [] };
+    try {
+      const payload = await request.server.jwt.verify(token);
+      if (
+        payload?.scope !== "guest-storefront" ||
+        !Array.isArray(payload.shopIds)
+      ) {
+        return { shopIds: [] };
+      }
+      return {
+        shopIds: payload.shopIds.filter((id) => typeof id === "string"),
+      };
+    } catch {
+      return { shopIds: [] };
+    }
+  }
   // Only customers are scoped. ADMIN/RIDER/shop-staff sessions retain
   // legacy unscoped behaviour to preserve existing internal contracts.
-  if (user.role && user.role !== 'CUSTOMER') return null
-  return { userId: user.id }
+  if (user.role && user.role !== "CUSTOMER") return null;
+  return { userId: user.id };
 }
 
 /**
@@ -33,138 +50,180 @@ export function resolveCustomerContext(request) {
  */
 export class ProductsController {
   constructor(service) {
-    this.service = service
+    this.service = service;
   }
 
   /** GET / — List products */
   async list(request, reply) {
-    const customerContext = resolveCustomerContext(request)
-    const priceMode = request.query.priceMode === 'wholesale' ? 'wholesale' : 'retail'
-    const result = await this.service.list({ ...request.query, priceMode }, customerContext)
-    return reply.code(200).send(
-      success(result.data, 'Products fetched', { pagination: result.pagination })
-    )
+    const customerContext = await resolveCustomerContext(request);
+    const priceMode =
+      request.query.priceMode === "wholesale" ? "wholesale" : "retail";
+    const result = await this.service.list(
+      { ...request.query, priceMode },
+      customerContext,
+    );
+    return reply
+      .code(200)
+      .send(
+        success(result.data, "Products fetched", {
+          pagination: result.pagination,
+        }),
+      );
   }
 
   /** GET /search — Hybrid search with fuzzy suggestions */
   async search(request, reply) {
-    const { q, ...filters } = request.query
-    const customerContext = resolveCustomerContext(request)
-    const result = await this.service.search(q, filters, customerContext)
+    const { q, ...filters } = request.query;
+    const customerContext = await resolveCustomerContext(request);
+    const result = await this.service.search(q, filters, customerContext);
     return reply.code(200).send(
-      success(result.data, 'Search results', {
+      success(result.data, "Search results", {
         pagination: result.pagination,
         suggestions: result.suggestions || [],
-      })
-    )
+      }),
+    );
   }
 
   /** GET /featured — Featured products */
   async featured(request, reply) {
-    const customerContext = resolveCustomerContext(request)
-    const products = await this.service.getFeatured(customerContext, request.query.priceMode === 'wholesale' ? 'wholesale' : 'retail')
-    return reply.code(200).send(success(products, 'Featured products'))
+    const customerContext = await resolveCustomerContext(request);
+    const products = await this.service.getFeatured(
+      customerContext,
+      request.query.priceMode === "wholesale" ? "wholesale" : "retail",
+    );
+    return reply.code(200).send(success(products, "Featured products"));
   }
 
   /** GET /price-drops — Products with price drops */
   async getPriceDrops(request, reply) {
-    const limit = Math.min(parseInt(request.query.limit, 10) || 10, 20)
-    const customerContext = resolveCustomerContext(request)
-    const products = await this.service.getPriceDrops(limit, customerContext, request.query.priceMode === 'wholesale' ? 'wholesale' : 'retail')
-    return reply.code(200).send(success(products, 'Price drop products fetched'))
+    const limit = Math.min(parseInt(request.query.limit, 10) || 10, 20);
+    const customerContext = await resolveCustomerContext(request);
+    const products = await this.service.getPriceDrops(
+      limit,
+      customerContext,
+      request.query.priceMode === "wholesale" ? "wholesale" : "retail",
+    );
+    return reply
+      .code(200)
+      .send(success(products, "Price drop products fetched"));
   }
 
   /** GET /last-minute — Last-minute craving products */
   async getLastMinute(request, reply) {
-    const limit = Math.min(parseInt(request.query.limit, 10) || 10, 20)
-    const customerContext = resolveCustomerContext(request)
-    const products = await this.service.getLastMinute(limit, customerContext, request.query.priceMode === 'wholesale' ? 'wholesale' : 'retail')
-    return reply.code(200).send(success(products, 'Last-minute products fetched'))
+    const limit = Math.min(parseInt(request.query.limit, 10) || 10, 20);
+    const customerContext = await resolveCustomerContext(request);
+    const products = await this.service.getLastMinute(
+      limit,
+      customerContext,
+      request.query.priceMode === "wholesale" ? "wholesale" : "retail",
+    );
+    return reply
+      .code(200)
+      .send(success(products, "Last-minute products fetched"));
   }
 
   /** GET /:id — Single product */
   async getOne(request, reply) {
-    const customerContext = resolveCustomerContext(request)
-    const priceMode = request.query.priceMode === 'wholesale' ? 'wholesale' : 'retail'
+    const customerContext = await resolveCustomerContext(request);
+    const priceMode =
+      request.query.priceMode === "wholesale" ? "wholesale" : "retail";
     const product = await this.service.getByIdOrSlug(
       request.params.id,
       customerContext,
       request.user?.id || null,
-      priceMode
-    )
+      priceMode,
+    );
     if (!product) {
-      return reply.code(404).send(error('Product not found', 'NOT_FOUND'))
+      return reply.code(404).send(error("Product not found", "NOT_FOUND"));
     }
 
     // Fire-and-forget product view tracking
-    const userId = request.user?.id || null
-    const productId = product.id
+    const userId = request.user?.id || null;
+    const productId = product.id;
     setImmediate(() => {
-      query(
-        'INSERT INTO product_views (product_id, user_id) VALUES ($1, $2)',
-        [productId, userId]
-      ).catch(() => { })
-    })
+      query("INSERT INTO product_views (product_id, user_id) VALUES ($1, $2)", [
+        productId,
+        userId,
+      ]).catch(() => {});
+    });
 
-    return reply.code(200).send(success(product, 'Product fetched'))
+    return reply.code(200).send(success(product, "Product fetched"));
   }
 
   /** GET /:id/related — Related products */
   async getRelated(request, reply) {
-    const customerContext = resolveCustomerContext(request)
+    const customerContext = await resolveCustomerContext(request);
     const products = await this.service.getRelated(
       request.params.id,
-      customerContext
-    )
+      customerContext,
+    );
     if (products === null) {
-      return reply.code(404).send(error('Product not found', 'NOT_FOUND'))
+      return reply.code(404).send(error("Product not found", "NOT_FOUND"));
     }
-    return reply.code(200).send(success(products, 'Related products'))
+    return reply.code(200).send(success(products, "Related products"));
   }
 
   /** GET /:id/options — All purchasable options for a product family */
   async getOptions(request, reply) {
-    const customerContext = resolveCustomerContext(request)
+    const customerContext = await resolveCustomerContext(request);
     const result = await this.service.getProductOptions(
       request.params.id,
-      customerContext
-    )
+      customerContext,
+    );
     if (!result) {
-      return reply.code(404).send(error('Product not found', 'NOT_FOUND'))
+      return reply.code(404).send(error("Product not found", "NOT_FOUND"));
     }
-    return reply.code(200).send(success(result, 'Product options fetched'))
+    return reply.code(200).send(success(result, "Product options fetched"));
   }
 
   /** POST / — Create product */
   async create(request, reply) {
-    const result = await this.service.create(request.body, request.user.id, request.ip)
-    return reply.code(201).send(success(result.product, 'Product created'))
+    const result = await this.service.create(
+      request.body,
+      request.user.id,
+      request.ip,
+    );
+    return reply.code(201).send(success(result.product, "Product created"));
   }
 
   /** PUT /:id — Update product */
   async update(request, reply) {
-    const result = await this.service.update(request.params.id, request.body, request.user.id, request.ip)
+    const result = await this.service.update(
+      request.params.id,
+      request.body,
+      request.user.id,
+      request.ip,
+    );
     if (!result.success) {
-      return reply.code(404).send(error(result.message, 'NOT_FOUND'))
+      return reply.code(404).send(error(result.message, "NOT_FOUND"));
     }
-    return reply.code(200).send(success(result.product, 'Product updated'))
+    return reply.code(200).send(success(result.product, "Product updated"));
   }
 
   /** PUT /:id/stock — Update stock */
   async updateStock(request, reply) {
-    const result = await this.service.updateStock(request.params.id, request.body.stock, request.user.id, request.ip)
+    const result = await this.service.updateStock(
+      request.params.id,
+      request.body.stock,
+      request.user.id,
+      request.ip,
+    );
     if (!result.success) {
-      return reply.code(404).send(error(result.message, 'NOT_FOUND'))
+      return reply.code(404).send(error(result.message, "NOT_FOUND"));
     }
-    return reply.code(200).send(success(result.product, 'Stock updated'))
+    return reply.code(200).send(success(result.product, "Stock updated"));
   }
 
   /** DELETE /:id — Delete product */
   async delete(request, reply) {
-    const result = await this.service.delete(request.params.id, request.user.id, request.ip)
+    const result = await this.service.delete(
+      request.params.id,
+      request.user.id,
+      request.ip,
+    );
     if (!result.success) {
-      return reply.code(404).send(error(result.message, 'NOT_FOUND'))
+      return reply.code(404).send(error(result.message, "NOT_FOUND"));
     }
-    return reply.code(200).send(success(null, 'Product deleted'))
+    return reply.code(200).send(success(null, "Product deleted"));
   }
 }

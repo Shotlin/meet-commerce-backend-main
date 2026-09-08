@@ -7,6 +7,11 @@
 
 import crypto from 'node:crypto'
 import { logger } from '../../config/logger.js'
+import { getClient } from '../../config/database.js'
+import { CartRepository } from '../cart/cart.repository.js'
+import { CartService } from '../cart/cart.service.js'
+import { AddressesRepository } from '../addresses/addresses.repository.js'
+import { ShopProductsRepository } from '../shop-products/shop-products.repository.js'
 
 const ALLOWED_TRANSITIONS = {
   CART_CREATED: ['ORDER_PLACED', 'CANCELLED'],
@@ -41,6 +46,109 @@ export class OrdersService {
     this.deliveryCalendarService = deps?.deliveryCalendarService || null
     this.paymentSettingsService = deps?.paymentSettingsService || deps?.configService || null
     this.billSummaryService = deps?.billSummaryService || null
+    this.cartRepo = deps?.cartRepository || new CartRepository()
+    this.cartService = deps?.cartService || new CartService(this.cartRepo)
+    this.addressRepo = deps?.addressesRepository || new AddressesRepository()
+    this.shopProductsRepo = deps?.shopProductsRepository || new ShopProductsRepository()
+  }
+
+  /**
+   * Checkout endpoint used by the mobile app.  This intentionally bridges
+   * the current Redis, store-aware cart to the Phase-8 orders tables; the
+   * previous handler only accepted a legacy checkout quote and therefore
+   * rejected every real mobile order before any checkout logic ran.
+   */
+  async placeOrder(customerId, payload) {
+    const priceMode = payload.priceMode === 'wholesale' ? 'wholesale' : 'retail'
+    const validation = await this.cartService.validateCart(customerId, priceMode)
+    if (!validation.valid) {
+      const err = new Error(validation.warnings?.[0] || 'Your cart cannot be checked out')
+      err.statusCode = 400
+      err.code = validation.failed?.[0]?.code || 'CART_INVALID'
+      throw err
+    }
+
+    const address = await this.addressRepo.findByIdAndUser(payload.addressId, customerId)
+    if (!address) {
+      const err = new Error('Delivery address not found')
+      err.statusCode = 404
+      err.code = 'ADDRESS_NOT_FOUND'
+      throw err
+    }
+
+    const groups = [...validation.groupedByShop.entries()]
+    const client = await getClient()
+    const created = []
+    try {
+      await client.query('BEGIN')
+      for (const [shopId, cartItems] of groups) {
+        const items = cartItems.map((line) => ({
+            productId: line.productId,
+            shopProductId: line.shopProductId,
+            name: line.name,
+            price: Number(line.effectivePrice),
+            quantity: Number(line.quantity),
+            unit: line.unit || null,
+            total: Number(line.lineTotal),
+            thumbnailUrl: line.thumbnailUrl || null,
+            pricingMode: priceMode,
+          }))
+
+        const subtotal = Number(items.reduce((sum, item) => sum + item.total, 0).toFixed(2))
+        const deliveryFee = subtotal >= 499 ? 0 : 25
+        const platformFee = 5
+        const totalPayable = Number((subtotal + deliveryFee + platformFee).toFixed(2))
+        const orderNumber = await this.repository.generateCheckoutOrderNumber(client, shopId)
+        const row = await this.repository.createCheckoutOrder(client, {
+          orderNumber,
+          customerId,
+          shopId,
+          status: 'ORDER_PLACED',
+          items,
+          subtotal,
+          deliveryFee,
+          platformFee,
+          totalPayable,
+          paymentMethod: payload.paymentMethod,
+          paymentStatus: payload.paymentMethod === 'COD' ? 'PENDING' : 'PENDING',
+          couponCode: payload.couponCode,
+          deliveryAddress: address,
+          deliveryNotes: payload.deliveryNotes,
+          estimatedDelivery: payload.deliveryMode === 'SCHEDULED'
+            ? payload.scheduledDeliveryAt || null
+            : null,
+        })
+        for (const item of items) {
+          await this.shopProductsRepo.applyStockChange(client, {
+            shopProductId: item.shopProductId,
+            delta: -item.quantity,
+            type: 'ORDER_DEDUCTION',
+            source: 'ORDER',
+            orderId: row.id,
+            reason: `Order ${orderNumber}`,
+          })
+        }
+        await this.repository.logStatusTransition(
+          row.id, null, 'ORDER_PLACED', customerId, 'Order placed from mobile checkout'
+        )
+        created.push(this.repository._formatCheckoutOrder(row))
+      }
+      await client.query('COMMIT')
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
+
+    // COD is confirmed as an order immediately.  Online carts remain until
+    // Razorpay verification succeeds, so a cancelled payment is retryable.
+    if (payload.paymentMethod === 'COD') {
+      await this.cartRepo.clearCart(customerId, priceMode)
+      await this.cartRepo.clearExtras(customerId, priceMode)
+    }
+    logger.info({ customerId, orderIds: created.map((order) => order.id) }, 'Mobile checkout completed')
+    return { order: created[0], orders: created }
   }
 
   async _checkStoreOpenForAsap() {

@@ -1,6 +1,6 @@
-import { cacheGet, cacheSet, cacheDel } from '../../utils/cache.js'
-import { logger } from '../../config/logger.js'
-import { allocationQueue } from '../../config/bullmq.js'
+import { cacheGet, cacheSet, cacheDel } from "../../utils/cache.js";
+import { logger } from "../../config/logger.js";
+import { allocationQueue } from "../../config/bullmq.js";
 
 /**
  * Allocation service — pure business logic for user-shop allocation.
@@ -18,8 +18,8 @@ import { allocationQueue } from '../../config/bullmq.js'
  * the BullMQ producer — keeping the controller and worker thin.
  */
 
-const CACHE_PREFIX = 'bakaloo:allocation:v1'
-const CACHE_TTL_SECONDS = 600
+const CACHE_PREFIX = "bakaloo:allocation:v1";
+const CACHE_TTL_SECONDS = 600;
 
 export class AllocationService {
   /**
@@ -29,8 +29,8 @@ export class AllocationService {
    *   shared allocationQueue). Injectable for tests.
    */
   constructor(repository, opts = {}) {
-    this.repo = repository
-    this.queue = opts.queue || allocationQueue
+    this.repo = repository;
+    this.queue = opts.queue || allocationQueue;
   }
 
   // ────────────────────────────────────────────────────────
@@ -38,12 +38,12 @@ export class AllocationService {
   // ────────────────────────────────────────────────────────
 
   cacheKeyFor(userId) {
-    return `${CACHE_PREFIX}:${userId}`
+    return `${CACHE_PREFIX}:${userId}`;
   }
 
   async invalidateUserCache(userId) {
-    if (!userId) return
-    await cacheDel(this.cacheKeyFor(userId))
+    if (!userId) return;
+    await cacheDel(this.cacheKeyFor(userId));
   }
 
   // ────────────────────────────────────────────────────────
@@ -65,11 +65,11 @@ export class AllocationService {
    * }>}>}
    */
   async getForUser(userId) {
-    const cacheKey = this.cacheKeyFor(userId)
-    const cached = await cacheGet(cacheKey)
-    if (cached) return cached
+    const cacheKey = this.cacheKeyFor(userId);
+    const cached = await cacheGet(cacheKey);
+    if (cached) return cached;
 
-    const rows = await this.repo.findByUserId(userId)
+    const rows = await this.repo.findByUserId(userId);
     const result = {
       shops: rows.map((r) => ({
         id: r.id,
@@ -82,10 +82,10 @@ export class AllocationService {
         matched_pincode: r.matched_pincode,
         is_primary: r.is_primary === true,
       })),
-    }
+    };
 
-    await cacheSet(cacheKey, result, CACHE_TTL_SECONDS)
-    return result
+    await cacheSet(cacheKey, result, CACHE_TTL_SECONDS);
+    return result;
   }
 
   /**
@@ -100,9 +100,54 @@ export class AllocationService {
    * @returns {Promise<string[]>}
    */
   async getShopIdsForUser(userId) {
-    const data = await this.getForUser(userId)
-    if (!data || !Array.isArray(data.shops)) return []
-    return data.shops.map((s) => s.shop_id)
+    const data = await this.getForUser(userId);
+    if (!data || !Array.isArray(data.shops)) return [];
+    return data.shops.map((s) => s.shop_id);
+  }
+
+  /**
+   * Resolve stores for a location without writing an account allocation.
+   * Used by the guest storefront gate: location remains on the device and
+   * this method only returns the serviceable store set for a signed session.
+   */
+  async resolveForLocation(address) {
+    const lat = Number(address?.lat);
+    const lng = Number(address?.lng);
+    const pincode = String(address?.pincode || "").trim();
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return {
+        success: false,
+        code: "INVALID_LOCATION",
+        message: "A valid device location is required",
+      };
+    }
+    const [pincodeMatches, radiusMatches] = await Promise.all([
+      pincode
+        ? this.repo.findShopsByPincode(pincode, { lat, lng })
+        : Promise.resolve([]),
+      this.repo.findShopsByRadius(lat, lng),
+    ]);
+    const resolved = this.mergeAndMarkPrimary({
+      pincode,
+      pincodeMatches,
+      radiusMatches,
+    });
+    if (resolved.length === 0) {
+      return { success: true, data: { shops: [] } };
+    }
+    const names = await this.repo.findByShopIds(
+      resolved.map((item) => item.shop_id),
+    );
+    const namesById = new Map(names.map((item) => [item.shop_id, item.name]));
+    return {
+      success: true,
+      data: {
+        shops: resolved.map((item) => ({
+          ...item,
+          name: namesById.get(item.shop_id) || "Store",
+        })),
+      },
+    };
   }
 
   // ────────────────────────────────────────────────────────
@@ -127,7 +172,7 @@ export class AllocationService {
    * @returns {Array<{shop_id: string, distance_km: number|null, matched_pincode: string|null, is_primary: boolean}>}
    */
   mergeAndMarkPrimary({ pincode, pincodeMatches, radiusMatches }) {
-    const byId = new Map()
+    const byId = new Map();
 
     // Insert pincode matches first so their matched_pincode is preserved on dedup.
     for (const row of pincodeMatches) {
@@ -140,15 +185,15 @@ export class AllocationService {
         matched_pincode: pincode,
         created_at: row.created_at,
         is_primary: false,
-      })
+      });
     }
 
     // Merge in radius matches; if shop already present (by pincode),
     // keep matched_pincode but adopt the haversine distance which is always
     // numeric here. If only radius-matched, matched_pincode stays null.
     for (const row of radiusMatches) {
-      const existing = byId.get(row.id)
-      const dist = Number(row.distance_km)
+      const existing = byId.get(row.id);
+      const dist = Number(row.distance_km);
       if (existing) {
         // Pincode-matched row may have null distance if coords were missing.
         // Radius rows always carry a numeric distance — prefer it when smaller.
@@ -156,7 +201,9 @@ export class AllocationService {
           existing.distance_km === null ||
           (Number.isFinite(dist) && dist < existing.distance_km)
         ) {
-          existing.distance_km = Number.isFinite(dist) ? dist : existing.distance_km
+          existing.distance_km = Number.isFinite(dist)
+            ? dist
+            : existing.distance_km;
         }
       } else {
         byId.set(row.id, {
@@ -165,57 +212,57 @@ export class AllocationService {
           matched_pincode: null,
           created_at: row.created_at,
           is_primary: false,
-        })
+        });
       }
     }
 
-    const merged = Array.from(byId.values())
-    if (merged.length === 0) return []
+    const merged = Array.from(byId.values());
+    if (merged.length === 0) return [];
 
     // Pick the primary: smallest distance_km, NULLs last; ties broken by
     // earliest created_at (Requirement 4.4).
-    let primary = null
+    let primary = null;
     for (const candidate of merged) {
       if (primary === null) {
-        primary = candidate
-        continue
+        primary = candidate;
+        continue;
       }
-      const a = primary
-      const b = candidate
-      const aDist = a.distance_km
-      const bDist = b.distance_km
+      const a = primary;
+      const b = candidate;
+      const aDist = a.distance_km;
+      const bDist = b.distance_km;
 
       // NULL distances rank last
       if (aDist === null && bDist !== null) {
-        primary = b
-        continue
+        primary = b;
+        continue;
       }
       if (aDist !== null && bDist === null) {
-        continue
+        continue;
       }
 
       if (aDist !== null && bDist !== null && bDist < aDist) {
-        primary = b
-        continue
+        primary = b;
+        continue;
       }
 
       // Tie break: both numeric equal OR both null
       if (aDist === bDist || (aDist === null && bDist === null)) {
-        const aCreated = new Date(a.created_at).getTime()
-        const bCreated = new Date(b.created_at).getTime()
+        const aCreated = new Date(a.created_at).getTime();
+        const bCreated = new Date(b.created_at).getTime();
         if (
           Number.isFinite(bCreated) &&
           Number.isFinite(aCreated) &&
           bCreated < aCreated
         ) {
-          primary = b
+          primary = b;
         }
       }
     }
-    if (primary) primary.is_primary = true
+    if (primary) primary.is_primary = true;
 
     // Strip created_at before returning — only persistence fields leak out.
-    return merged.map(({ created_at: _omit, ...rest }) => rest)
+    return merged.map(({ created_at: _omit, ...rest }) => rest);
   }
 
   // ────────────────────────────────────────────────────────
@@ -239,61 +286,64 @@ export class AllocationService {
     if (!userId) {
       return {
         success: false,
-        message: 'user_id is required',
-        code: 'USER_ID_REQUIRED',
-      }
+        message: "user_id is required",
+        code: "USER_ID_REQUIRED",
+      };
     }
 
-    const lat = address?.lat
-    const lng = address?.lng
-    const pincode = address?.pincode
+    const lat = address?.lat;
+    const lng = address?.lng;
+    const pincode = address?.pincode;
 
     // Requirement 4.6 — coordinates are mandatory for allocation
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
       return {
         success: false,
-        message: 'A complete delivery address with coordinates is required',
-        code: 'NO_COORDINATES',
-      }
+        message: "A complete delivery address with coordinates is required",
+        code: "NO_COORDINATES",
+      };
     }
-    if (!pincode || typeof pincode !== 'string' || pincode.trim().length === 0) {
+    if (
+      !pincode ||
+      typeof pincode !== "string" ||
+      pincode.trim().length === 0
+    ) {
       return {
         success: false,
-        message: 'A complete delivery address with pincode is required',
-        code: 'NO_PINCODE',
-      }
+        message: "A complete delivery address with pincode is required",
+        code: "NO_PINCODE",
+      };
     }
 
     // Two parallel DB reads — independent so they run in one round-trip.
     const [pincodeMatches, radiusMatches] = await Promise.all([
       this.repo.findShopsByPincode(pincode, { lat, lng }),
       this.repo.findShopsByRadius(lat, lng),
-    ])
+    ]);
 
     const allocations = this.mergeAndMarkPrimary({
       pincode,
       pincodeMatches,
       radiusMatches,
-    })
+    });
 
-    await this.repo.replaceForUser(userId, allocations)
-    await this.invalidateUserCache(userId)
+    await this.repo.replaceForUser(userId, allocations);
+    await this.invalidateUserCache(userId);
 
     logger.info(
       {
         userId,
-        action: 'allocation_recomputed',
+        action: "allocation_recomputed",
         count: allocations.length,
-        primaryShopId:
-          allocations.find((a) => a.is_primary)?.shop_id ?? null,
+        primaryShopId: allocations.find((a) => a.is_primary)?.shop_id ?? null,
       },
-      'User-shop allocations recomputed'
-    )
+      "User-shop allocations recomputed",
+    );
 
     // Hydrate via the read path so the response shape matches getForUser
     // (joined name from shops). Avoids a second client trip for callers that
     // need names; note this read also primes the cache.
-    return { success: true, data: await this.getForUser(userId) }
+    return { success: true, data: await this.getForUser(userId) };
   }
 
   // ────────────────────────────────────────────────────────
@@ -312,26 +362,26 @@ export class AllocationService {
    * @returns {Promise<string|null>} BullMQ job id, or null on failure
    */
   async enqueueShopAreaChange(shopId) {
-    if (!shopId) return null
+    if (!shopId) return null;
     try {
       const job = await this.queue.add(
-        'recompute-by-shop',
-        { type: 'recompute-by-shop', shopId },
-        { jobId: `recompute-by-shop:${shopId}` }
-      )
+        "recompute-by-shop",
+        { type: "recompute-by-shop", shopId },
+        { jobId: `recompute-by-shop:${shopId}` },
+      );
       logger.info(
-        { shopId, jobId: job.id, action: 'allocation_job_enqueued' },
-        'Allocation recompute job enqueued for shop area change'
-      )
-      return job.id
+        { shopId, jobId: job.id, action: "allocation_job_enqueued" },
+        "Allocation recompute job enqueued for shop area change",
+      );
+      return job.id;
     } catch (err) {
       // Don't let a queue outage break a shop update — log and let the caller
       // succeed; recompute can be re-triggered manually.
       logger.error(
-        { shopId, err: err.message, action: 'allocation_enqueue_failed' },
-        'Failed to enqueue allocation recompute job'
-      )
-      return null
+        { shopId, err: err.message, action: "allocation_enqueue_failed" },
+        "Failed to enqueue allocation recompute job",
+      );
+      return null;
     }
   }
 }

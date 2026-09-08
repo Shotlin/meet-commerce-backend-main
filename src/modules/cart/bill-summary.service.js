@@ -51,8 +51,8 @@ export class BillSummaryService {
    * @param {string} userId
    * @param {string|null} [addressId] - optional selected address; defaults to the user's default address
    */
-  async getBillSummary(userId, addressId = null, { quickDeliverySelected = false } = {}) {
-    const cart = await this.cartService.getCart(userId)
+  async getBillSummary(userId, addressId = null, { quickDeliverySelected = false, priceMode = 'retail' } = {}) {
+    const cart = await this.cartService.getCart(userId, priceMode)
     const paymentConfig = await this.paymentSettingsService.getConfig()
     if (!cart.items || cart.items.length === 0) {
       return this._emptyBill(paymentConfig)
