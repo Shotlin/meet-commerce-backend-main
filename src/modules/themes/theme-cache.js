@@ -18,8 +18,10 @@ export function getAdminTabThemesCacheKey(storeKey = 'all', status = 'all') {
   return `${ADMIN_TAB_THEMES_CACHE_PREFIX}:${storeKey}:${status}`
 }
 
-export function getTabManifestCacheKey(storeKey = 'zepto') {
-  return `${TAB_MANIFEST_CACHE_PREFIX}:${storeKey}`
+export function getTabManifestCacheKey(storeKey = 'zepto', shopId = null) {
+  // The same visual store can have a different theme for each fulfilment
+  // shop. Never let a cached Kolkata manifest be returned to another shop.
+  return `${TAB_MANIFEST_CACHE_PREFIX}:${storeKey}:${shopId || 'global'}`
 }
 
 export function getSectionCacheKey(tabId) {

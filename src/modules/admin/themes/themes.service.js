@@ -64,15 +64,15 @@ export class ThemesService {
     return theme?.theme_data ?? null
   }
 
-  async getTabThemes() {
-    const cacheKey = getAdminTabThemesCacheKey()
+  async getTabThemes(storeKey = null) {
+    const cacheKey = getAdminTabThemesCacheKey(storeKey || 'all', 'active')
     const cached = await redis.get(cacheKey)
     if (cached) {
       const parsed = JSON.parse(cached)
       if (Array.isArray(parsed)) return parsed
     }
 
-    const themes = await repo.findAllTabThemes({ status: 'active' })
+    const themes = await repo.findAllTabThemes({ storeKey, status: 'active' })
     if (themes.length) {
       await redis.set(cacheKey, JSON.stringify(themes), 'EX', CACHE_TTL)
     }
@@ -95,9 +95,27 @@ export class ThemesService {
     return theme
   }
 
-  async update(id, data, adminId, ip) {
-    const existing = await repo.findById(id)
+  async update(id, data, adminId, ip, shopId = null) {
+    let existing = await repo.findById(id)
     if (!existing) return null
+
+    // Theme Builder previews the global theme until a fulfilment shop has its
+    // own design. On that shop's first save, materialize an independent copy
+    // instead of mutating the global row used by every other shop.
+    if (shopId && !existing.shop_id && existing.tab_id) {
+      const shopTheme = await repo.create({
+        name: existing.name,
+        theme_data: existing.theme_data,
+        shop_id: shopId,
+        tab_id: existing.tab_id,
+        status: existing.status,
+        ab_variant: existing.ab_variant,
+        ab_split_percent: existing.ab_split_percent,
+      })
+      if (!shopTheme) return null
+      existing = shopTheme
+      id = shopTheme.id
+    }
 
     if (data.tab_id) {
       const tab = await repo.findTabMeta(data.tab_id)

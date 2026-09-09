@@ -139,8 +139,9 @@ export class PublicThemeController {
 
   async getTabThemes(request, reply) {
     const storeKey = normalizeStoreKey(request.query?.store_key)
+    const shopId = await this._resolveThemeShopId(request)
     const clientETag = request.headers['if-none-match']
-    const cacheKey = getTabManifestCacheKey(storeKey)
+    const cacheKey = getTabManifestCacheKey(storeKey, shopId)
 
     const cached = await redis.get(cacheKey)
     if (cached) {
@@ -157,8 +158,8 @@ export class PublicThemeController {
       return success(parsed.data, 'Tab themes')
     }
 
-    const rows = await getTabManifestRows(storeKey)
-    const responseData = buildTabManifestResponse(storeKey, rows)
+    const rows = await getTabManifestRows(storeKey, shopId)
+    const responseData = buildTabManifestResponse(storeKey, rows, shopId)
 
     // Admin-configurable delivery-time display badge (e.g. "45 mins
     // delivery") shown on the app's home header — a plain manually-set
@@ -186,6 +187,28 @@ export class PublicThemeController {
     reply.header('ETag', etag)
     reply.header('Cache-Control', 'private, max-age=60')
     return success(responseData, 'Tab themes')
+  }
+
+  /** Resolve one fulfilment shop for theme/layout selection. Product calls
+   * already understand both customer allocations and signed guest tokens;
+   * the visual manifest must use the identical scope. */
+  async _resolveThemeShopId(request) {
+    const customerContext = await resolveCustomerContext(request)
+    if (!customerContext) return null
+
+    if (Array.isArray(customerContext.shopIds)) {
+      return customerContext.shopIds[0] || null
+    }
+
+    if (!customerContext.userId) return null
+    try {
+      const { shops } = await this.allocationService.getForUser(customerContext.userId)
+      const primary = shops?.find((shop) => shop.is_primary) ?? shops?.[0]
+      return primary?.shop_id || null
+    } catch (err) {
+      logger.error({ err, userId: customerContext.userId }, 'Failed to resolve shop for tab theme lookup')
+      return null
+    }
   }
 
   async getTabHomeContent(request, reply) {
@@ -343,6 +366,7 @@ export class PublicThemeController {
 
   async getSectionManifest(request, reply) {
     const storeKey = normalizeStoreKey(request.query?.store_key)
+    const shopId = await this._resolveThemeShopId(request)
     const tabKey = `${request.params.tabKey || ''}`.trim()
     const priceMode = request.query?.priceMode === 'wholesale'
       ? 'wholesale'
@@ -389,8 +413,14 @@ export class PublicThemeController {
        FROM section_manifests
        WHERE tab_id = $1
          AND visible = true
+         AND shop_id IS NOT DISTINCT FROM (
+           CASE WHEN EXISTS (
+             SELECT 1 FROM section_manifests scoped
+             WHERE scoped.tab_id = $1 AND scoped.shop_id = $2
+           ) THEN $2::uuid ELSE NULL END
+         )
        ORDER BY sort_order ASC`,
-      [tab.id]
+      [tab.id, shopId]
     )
 
     // Resolve products for sections that have product_ids or category_ids in merch_binding.
@@ -487,7 +517,7 @@ function shopBucketKey(allocatedShopIds) {
   return [...allocatedShopIds].sort().join('_')
 }
 
-async function getTabManifestRows(storeKey) {
+async function getTabManifestRows(storeKey, shopId = null) {
   const { rows } = await query(
     `SELECT
        tab.id AS tab_id,
@@ -509,7 +539,8 @@ async function getTabManifestRows(storeKey) {
        WHERE tab_id = tab.id
          AND status = 'active'
          AND ab_variant = 'A'
-       ORDER BY updated_at DESC, created_at DESC
+         AND (shop_id = $2 OR shop_id IS NULL)
+       ORDER BY (shop_id = $2) DESC NULLS LAST, updated_at DESC, created_at DESC
        LIMIT 1
      ) theme_a ON true
      LEFT JOIN LATERAL (
@@ -518,25 +549,39 @@ async function getTabManifestRows(storeKey) {
        WHERE tab_id = tab.id
          AND status = 'active'
          AND ab_variant = 'B'
-       ORDER BY updated_at DESC, created_at DESC
+         AND (shop_id = $2 OR shop_id IS NULL)
+       ORDER BY (shop_id = $2) DESC NULLS LAST, updated_at DESC, created_at DESC
        LIMIT 1
      ) theme_b ON true
      WHERE tab.store_key = $1
        AND tab.status = 'active'
      ORDER BY tab.sort_order ASC, tab.label ASC`,
-    [storeKey]
+    [storeKey, shopId]
   )
 
   return rows
 }
 
-function buildTabManifestResponse(storeKey, rows) {
+function buildTabManifestResponse(storeKey, rows, shopId = null) {
   const fallbackTheme =
     rows.find((row) => row.tab_key === 'all' && row.theme_data)?.theme_data ?? null
 
   const tabs = rows.map((row) => {
-    const themeData = mergeThemeData(fallbackTheme, row.theme_data)
-    const variantBThemeData = mergeThemeData(fallbackTheme, row.variant_b_theme_data)
+    // "All" is a layout fallback. Its header photo must not leak into a
+    // category that has its own theme, especially when that category sets its
+    // chrome colours transparent. Each category may still explicitly upload
+    // its own header image.
+    const isolateHeaderImage = row.tab_key !== 'all' && row.theme_data != null
+    const themeData = mergeThemeData(
+      isolateHeaderImage ? withoutFallbackHeaderImage(fallbackTheme) : fallbackTheme,
+      row.theme_data
+    )
+    const variantBThemeData = mergeThemeData(
+      row.tab_key !== 'all' && row.variant_b_theme_data != null
+        ? withoutFallbackHeaderImage(fallbackTheme)
+        : fallbackTheme,
+      row.variant_b_theme_data
+    )
 
     return {
       tab_id: row.tab_id,
@@ -562,8 +607,24 @@ function buildTabManifestResponse(storeKey, rows) {
 
   return {
     store_key: storeKey,
+    shop_id: shopId,
     tabs,
   }
+}
+
+function withoutFallbackHeaderImage(themeData) {
+  if (!isPlainObject(themeData)) return themeData
+  const clone = { ...themeData }
+  if (isPlainObject(themeData.sections)) {
+    clone.sections = { ...themeData.sections }
+    if (isPlainObject(themeData.sections.headerBackground)) {
+      clone.sections.headerBackground = {
+        ...themeData.sections.headerBackground,
+        imageUrl: null,
+      }
+    }
+  }
+  return clone
 }
 
 function mergeThemeData(baseValue, overrideValue) {

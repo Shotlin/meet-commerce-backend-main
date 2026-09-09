@@ -3,13 +3,18 @@ import { success, error } from '../../../utils/apiResponse.js'
 
 const svc = new ThemesService()
 
+function shopScope(request) {
+  const value = request.headers?.['x-shop-id']
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
 export class ThemesController {
   async list(request, reply) {
     return success(await svc.list(), 'Themes fetched')
   }
 
   async getTabThemes(request, reply) {
-    return success(await svc.getTabThemes(), 'Tab themes fetched')
+    return success(await svc.getTabThemes(request.query?.store_key), 'Tab themes fetched')
   }
 
   async getById(request, reply) {
@@ -26,7 +31,13 @@ export class ThemesController {
   }
 
   async update(request, reply) {
-    const theme = await svc.update(request.params.id, request.body, request.user.id, request.ip)
+    const theme = await svc.update(
+      request.params.id,
+      request.body,
+      request.user.id,
+      request.ip,
+      shopScope(request)
+    )
     if (!theme) return error('Theme not found', 404)
     return success(theme, 'Theme updated')
   }

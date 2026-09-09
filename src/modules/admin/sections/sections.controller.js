@@ -3,9 +3,14 @@ import { success, error } from '../../../utils/apiResponse.js'
 
 const svc = new SectionsService()
 
+function shopScope(request) {
+  const value = request.headers?.['x-shop-id']
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
 export class SectionsController {
   async listByTab(request, reply) {
-    return success(await svc.getByTabId(request.params.tabId), 'Sections fetched')
+    return success(await svc.getByTabId(request.params.tabId, shopScope(request)), 'Sections fetched')
   }
 
   async getById(request, reply) {
@@ -15,7 +20,7 @@ export class SectionsController {
   }
 
   async create(request, reply) {
-    const section = await svc.create(request.params.tabId, request.body, request.user.id, request.ip)
+    const section = await svc.create(request.params.tabId, request.body, request.user.id, request.ip, shopScope(request))
     if (!section) return error('Tab not found', 404)
     reply.code(201)
     return success(section, 'Section created')
@@ -40,7 +45,7 @@ export class SectionsController {
   }
 
   async reorder(request, reply) {
-    const sections = await svc.reorder(request.params.tabId, request.body.order, request.user.id, request.ip)
+    const sections = await svc.reorder(request.params.tabId, request.body.order, request.user.id, request.ip, shopScope(request))
     return success(sections, 'Sections reordered')
   }
 

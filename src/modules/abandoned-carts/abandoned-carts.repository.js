@@ -189,8 +189,8 @@ export class AbandonedCartsRepository {
    */
   async getCustomerLTV(userId) {
     const { rows: [row] } = await query(
-      `SELECT COALESCE(SUM(total_amount), 0) AS ltv, COUNT(*)::int AS order_count
-       FROM orders WHERE user_id = $1 AND status = 'DELIVERED'`,
+      `SELECT COALESCE(SUM(total_payable), 0) AS ltv, COUNT(*)::int AS order_count
+       FROM orders WHERE customer_id = $1 AND status = 'DELIVERED'`,
       [userId]
     )
     return { ltv: parseFloat(row.ltv), orderCount: row.order_count }

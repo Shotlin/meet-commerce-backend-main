@@ -22,7 +22,16 @@ export default async function adminThemeRoutes(fastify) {
   fastify.put('/:id', { schema: updateThemeSchema }, ctrl.update)
   fastify.put('/:id/activate', { schema: themeIdSchema }, ctrl.activate)
   fastify.delete('/:id', { schema: themeIdSchema }, ctrl.remove)
-  fastify.get('/tabs', ctrl.getTabThemes)
+  fastify.get('/tabs', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          store_key: { type: 'string', enum: ['zepto', 'off_zone', 'super_mall', 'cafe'] },
+        },
+      },
+    },
+  }, ctrl.getTabThemes)
   fastify.get('/:id/versions', { schema: themeIdSchema }, ctrl.getVersions)
   fastify.post('/:id/schedule', { schema: scheduleThemeSchema }, ctrl.scheduleTheme)
   fastify.delete('/:id/schedule', { schema: themeIdSchema }, ctrl.cancelSchedule)

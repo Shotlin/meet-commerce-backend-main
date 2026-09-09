@@ -177,8 +177,8 @@ async function _processCandidate(userId, lastActivityMs) {
 async function _excludeUsersWithPendingPayment(userIds) {
   if (userIds.length === 0) return new Set()
   const { rows } = await query(
-    `SELECT DISTINCT user_id FROM orders
-      WHERE user_id = ANY($1::uuid[])
+    `SELECT DISTINCT customer_id AS user_id FROM orders
+      WHERE customer_id = ANY($1::uuid[])
         AND status = 'PENDING'
         AND payment_status = 'PENDING'
         AND payment_method IN ('ONLINE', 'WALLET')`,

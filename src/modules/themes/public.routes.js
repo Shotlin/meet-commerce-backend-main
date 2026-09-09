@@ -71,6 +71,7 @@ export default async function publicThemeRoutes(fastify) {
         },
       },
     },
+    preHandler: [tryAttachUser],
   }, ctrl.getTabThemes.bind(ctrl))
 
   fastify.get('/tabs/:key/home', {

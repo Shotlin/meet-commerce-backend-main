@@ -18,22 +18,22 @@ function broadcastSectionUpdate(tabKey) {
 }
 
 export class SectionsService {
-  async getByTabId(tabId) {
-    return repo.findByTabId(tabId)
+  async getByTabId(tabId, shopId = null) {
+    return repo.findByTabId(tabId, shopId, { ensureShopScope: Boolean(shopId) })
   }
 
   async getById(id) {
     return repo.findById(id)
   }
 
-  async create(tabId, data, adminId, ip) {
+  async create(tabId, data, adminId, ip, shopId = null) {
     const tab = await repo.findTabById(tabId)
     if (!tab) return null
 
     const section = await repo.create(tabId, {
       ...data,
       config: data.config || {},
-    })
+    }, shopId)
 
     const createdSection = await repo.findById(section.id)
 
@@ -84,8 +84,8 @@ export class SectionsService {
     return section
   }
 
-  async reorder(tabId, orderedIds, adminId, ip) {
-    const sections = await repo.reorder(tabId, orderedIds)
+  async reorder(tabId, orderedIds, adminId, ip, shopId = null) {
+    const sections = await repo.reorder(tabId, orderedIds, shopId)
     const tab = await repo.findTabById(tabId)
 
     await invalidateSectionCaches()

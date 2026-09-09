@@ -30,17 +30,20 @@ async function corsPlugin(fastify) {
   const origins = expandLoopbackOrigins(configuredOrigins)
   const allowSet = new Set(origins)
 
-  // Production domains are always allowed regardless of env config, so we never
-  // get blocked by a missing CORS_ORIGINS entry after a deploy. Matches:
+  // Existing production domain families are always allowed regardless of env
+  // config, so they are not blocked by a missing CORS_ORIGINS entry after a
+  // deploy. Matches:
   //   - bakaloo.in and any subdomain (www, api, dash, etc.)
   //   - shotlin.in and any subdomain
   //   - *.vercel.app preview/production deployments
   const allowedHostSuffixes = ['bakaloo.in', 'shotlin.in', 'vercel.app']
+  const allowedProductionOrigins = new Set(['https://dash.fc.opslin.com'])
 
   function isOriginAllowed(origin) {
     // Non-browser requests (curl, server-to-server) send no Origin header.
     if (!origin) return true
     if (allowSet.has(origin)) return true
+    if (allowedProductionOrigins.has(origin)) return true
     try {
       const { hostname, protocol } = new URL(origin)
       if (protocol !== 'https:' && protocol !== 'http:') return false
@@ -70,6 +73,7 @@ async function corsPlugin(fastify) {
       'X-Shop-Id',
       'X-Role-Scope',
       'X-Warehouse-Scope',
+      'X-Storefront-Token',
     ],
     exposedHeaders: ['X-Total-Count', 'X-Total-Pages'],
     maxAge: 86400,

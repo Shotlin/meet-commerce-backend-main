@@ -212,3 +212,26 @@ describe('AbandonedCartsRepository.getUserRecoveryRate', () => {
     expect(await repo.getUserRecoveryRate(USER_ID)).toBe(0.5)
   })
 })
+
+describe('AbandonedCartsRepository.getCustomerLTV', () => {
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('uses the canonical orders customer and payment columns', async () => {
+    query.mockResolvedValueOnce({ rows: [{ ltv: '420.50', order_count: 3 }] })
+
+    const repo = new AbandonedCartsRepository()
+    await expect(repo.getCustomerLTV(USER_ID)).resolves.toEqual({
+      ltv: 420.5,
+      orderCount: 3,
+    })
+
+    const [sql, params] = query.mock.calls[0]
+    expect(sql).toContain('SUM(total_payable)')
+    expect(sql).toContain('customer_id = $1')
+    expect(sql).not.toContain('total_amount')
+    expect(sql).not.toContain('FROM orders WHERE user_id')
+    expect(params).toEqual([USER_ID])
+  })
+})

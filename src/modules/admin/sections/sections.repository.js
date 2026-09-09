@@ -20,12 +20,52 @@ export class SectionsRepository {
     return tab || null
   }
 
-  async findByTabId(tabId) {
+  async ensureShopLayout(tabId, shopId) {
+    if (!shopId) return
+
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const { rows } = await client.query(
+        `INSERT INTO section_layout_scopes (tab_id, shop_id)
+         VALUES ($1, $2)
+         ON CONFLICT DO NOTHING
+         RETURNING tab_id`,
+        [tabId, shopId]
+      )
+      // Copy the global layout once, preserving its order. The marker means
+      // an intentionally empty shop layout stays empty after a reload.
+      if (rows.length > 0) {
+        await client.query(
+          `INSERT INTO section_manifests (
+             tab_id, shop_id, section_type, sort_order, visible, config, merch_binding
+           )
+           SELECT tab_id, $2, section_type, sort_order, visible, config, merch_binding
+           FROM section_manifests
+           WHERE tab_id = $1 AND shop_id IS NULL
+           ORDER BY sort_order ASC`,
+          [tabId, shopId]
+        )
+      }
+      await client.query('COMMIT')
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
+  }
+
+  async findByTabId(tabId, shopId = null, { ensureShopScope = false } = {}) {
+    if (ensureShopScope && shopId) {
+      await this.ensureShopLayout(tabId, shopId)
+    }
     const { rows } = await query(
       `SELECT * FROM section_manifests
        WHERE tab_id = $1
+         AND shop_id IS NOT DISTINCT FROM $2
        ORDER BY sort_order ASC`,
-      [tabId]
+      [tabId, shopId]
     )
     return rows
   }
@@ -39,27 +79,30 @@ export class SectionsRepository {
     return section || null
   }
 
-  async create(tabId, data) {
+  async create(tabId, data, shopId = null) {
+    if (shopId) await this.ensureShopLayout(tabId, shopId)
     const { rows: [{ max_order }] } = await query(
       `SELECT COALESCE(MAX(sort_order), -1) AS max_order
        FROM section_manifests
-       WHERE tab_id = $1`,
-      [tabId]
+       WHERE tab_id = $1 AND shop_id IS NOT DISTINCT FROM $2`,
+      [tabId, shopId]
     )
 
     const { rows: [section] } = await query(
       `INSERT INTO section_manifests (
          tab_id,
+         shop_id,
          section_type,
          sort_order,
          visible,
          config,
          merch_binding
        )
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)
        RETURNING *`,
       [
         tabId,
+        shopId,
         data.section_type,
         max_order + 1,
         data.visible ?? true,
@@ -128,17 +171,17 @@ export class SectionsRepository {
     try {
       await client.query('BEGIN')
       await client.query('DELETE FROM section_manifests WHERE id = $1', [id])
-      await client.query(
+    await client.query(
         `WITH numbered AS (
            SELECT id, ROW_NUMBER() OVER (ORDER BY sort_order ASC, created_at ASC) - 1 AS new_order
            FROM section_manifests
-           WHERE tab_id = $1
+           WHERE tab_id = $1 AND shop_id IS NOT DISTINCT FROM $2
          )
          UPDATE section_manifests sm
          SET sort_order = numbered.new_order
          FROM numbered
          WHERE sm.id = numbered.id`,
-        [section.tab_id]
+        [section.tab_id, section.shop_id]
       )
       await client.query('COMMIT')
     } catch (err) {
@@ -151,7 +194,7 @@ export class SectionsRepository {
     return section
   }
 
-  async reorder(tabId, orderedIds) {
+  async reorder(tabId, orderedIds, shopId = null) {
     const client = await getClient()
     try {
       await client.query('BEGIN')
@@ -159,8 +202,8 @@ export class SectionsRepository {
         await client.query(
           `UPDATE section_manifests
            SET sort_order = $1
-           WHERE id = $2 AND tab_id = $3`,
-          [i, orderedIds[i], tabId]
+           WHERE id = $2 AND tab_id = $3 AND shop_id IS NOT DISTINCT FROM $4`,
+          [i, orderedIds[i], tabId, shopId]
         )
       }
       await client.query('COMMIT')
@@ -171,7 +214,7 @@ export class SectionsRepository {
       client.release()
     }
 
-    return this.findByTabId(tabId)
+    return this.findByTabId(tabId, shopId)
   }
 
   async duplicate(id) {
@@ -181,23 +224,25 @@ export class SectionsRepository {
     const { rows: [{ max_order }] } = await query(
       `SELECT COALESCE(MAX(sort_order), -1) AS max_order
        FROM section_manifests
-       WHERE tab_id = $1`,
-      [original.tab_id]
+       WHERE tab_id = $1 AND shop_id IS NOT DISTINCT FROM $2`,
+      [original.tab_id, original.shop_id]
     )
 
     const { rows: [section] } = await query(
       `INSERT INTO section_manifests (
          tab_id,
+         shop_id,
          section_type,
          sort_order,
          visible,
          config,
          merch_binding
        )
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)
        RETURNING *`,
       [
         original.tab_id,
+        original.shop_id,
         original.section_type,
         max_order + 1,
         original.visible,
