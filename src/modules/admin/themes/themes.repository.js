@@ -273,8 +273,9 @@ export class ThemesRepository {
            WHERE tab_id = $1
              AND ab_variant = $2
              AND id <> $3
-             AND status = 'active'`,
-          [existing.tab_id, existing.ab_variant, id]
+             AND status = 'active'
+             AND shop_id IS NOT DISTINCT FROM $4`,
+          [existing.tab_id, existing.ab_variant, id, existing.shop_id ?? null]
         )
       }
 
