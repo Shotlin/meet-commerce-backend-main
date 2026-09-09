@@ -803,6 +803,7 @@ async function getProductsByIds(productIds, allocatedShopIds = null, priceMode =
        p.description,
        p.ingredients,
        p.nutrition_info,
+       p.highlights,
        p.storage_instructions,
        p.product_family_id,
        pf.name AS family_name,
