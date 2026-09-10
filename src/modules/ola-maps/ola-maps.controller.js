@@ -10,7 +10,18 @@ export class OlaMapsController {
 
   /** GET /style-url [AUTH] */
   async getStyleUrl(request, reply) {
-    const publicBaseUrl = `${request.protocol}://${request.hostname}`
+    // The public API is HTTPS, but the reverse proxy terminates TLS before
+    // handing the request to Fastify. Some proxy paths omit X-Forwarded-Proto,
+    // making request.protocol incorrectly become `http` and causing Android
+    // MapLibre to reject the returned style URL as clear-text traffic.
+    const forwardedProto = request.headers['x-forwarded-proto']
+    const protocol = Array.isArray(forwardedProto)
+      ? forwardedProto[0]
+      : forwardedProto?.split(',')[0]?.trim()
+    const publicProtocol = protocol === 'http' || protocol === 'https'
+      ? protocol
+      : 'https'
+    const publicBaseUrl = `${publicProtocol}://${request.hostname}`
     const { configured, styleUrl } = await this.service.getStyleInfo(publicBaseUrl)
     return reply.code(200).send(success({ configured, styleUrl }))
   }
