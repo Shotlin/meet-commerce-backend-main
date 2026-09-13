@@ -165,6 +165,28 @@ export class AdminOrdersRepository {
         )
       }
 
+      // Keep the rider-facing assignment in lock-step with a terminal
+      // dashboard action.  Previously the dashboard only updated `orders`.
+      // The rider's GET /delivery/orders query is intentionally keyed by
+      // `delivery_assignments.status`, so an admin-delivered/cancelled order
+      // could remain in a rider's active batch after any reconnect or refresh.
+      // Updating both records in this transaction makes the socket event and
+      // the subsequent REST reconciliation describe the same truth.
+      if (newStatus === 'DELIVERED' || newStatus === 'CANCELLED') {
+        const assignmentTimestampColumn = newStatus === 'DELIVERED'
+          ? 'delivered_at'
+          : 'cancelled_at'
+        await client.query(
+          `UPDATE delivery_assignments
+           SET status = $1,
+               ${assignmentTimestampColumn} = COALESCE(${assignmentTimestampColumn}, NOW()),
+               updated_at = NOW()
+           WHERE order_id = $2
+             AND status = ANY($3::text[])`,
+          [newStatus, orderId, ['ASSIGNED', 'ACCEPTED', 'PICKED_UP', 'IN_TRANSIT']]
+        )
+      }
+
       await client.query(
         `INSERT INTO order_status_history (order_id, from_status, to_status, changed_by, note)
          VALUES ($1, $2, $3, $4, $5)`,
