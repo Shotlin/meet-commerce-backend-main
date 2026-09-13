@@ -567,11 +567,12 @@ function buildTabManifestResponse(storeKey, rows, shopId = null) {
     rows.find((row) => row.tab_key === 'all' && row.theme_data)?.theme_data ?? null
 
   const tabs = rows.map((row) => {
-    // "All" is a layout fallback. Its header photo must not leak into a
-    // category that has its own theme, especially when that category sets its
-    // chrome colours transparent. Each category may still explicitly upload
-    // its own header image.
-    const isolateHeaderImage = row.tab_key !== 'all' && row.theme_data != null
+    // "All" is a layout fallback. Its header photo must never leak into a
+    // different category: every category either shows its own uploaded image
+    // or no image at all. This also keeps transparent header/search/tab rows
+    // from revealing a previous category's artwork while a customer switches
+    // tabs. Other shared theme fields still inherit normally.
+    const isolateHeaderImage = row.tab_key !== 'all'
     const themeData = mergeThemeData(
       isolateHeaderImage ? withoutFallbackHeaderImage(fallbackTheme) : fallbackTheme,
       row.theme_data
