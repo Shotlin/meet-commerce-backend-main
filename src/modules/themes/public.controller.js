@@ -610,22 +610,37 @@ function buildTabManifestResponse(storeKey, rows, shopId = null) {
   }
 }
 
-function withoutFallbackHeaderImage(themeData) {
+// The settings that describe HOW the fallback's header image is laid out
+// (extend into the mini promo bar + the exact A/B split heights). They belong
+// to that one image, so they must not survive when the image itself is
+// stripped — otherwise a category with its own header image, but no toggle of
+// its own, would inherit "All"'s extension and split.
+const HEADER_IMAGE_LAYOUT_KEYS = [
+  'recommendedWidth',
+  'topRegionHeight',
+  'promoRegionHeight',
+  'totalHeight',
+]
+
+export function withoutFallbackHeaderImage(themeData) {
   if (!isPlainObject(themeData)) return themeData
   const clone = { ...themeData }
   if (isPlainObject(themeData.sections)) {
     clone.sections = { ...themeData.sections }
     if (isPlainObject(themeData.sections.headerBackground)) {
-      clone.sections.headerBackground = {
+      const headerBackground = {
         ...themeData.sections.headerBackground,
         imageUrl: null,
+        extendToPromoBar: false,
       }
+      for (const key of HEADER_IMAGE_LAYOUT_KEYS) delete headerBackground[key]
+      clone.sections.headerBackground = headerBackground
     }
   }
   return clone
 }
 
-function mergeThemeData(baseValue, overrideValue) {
+export function mergeThemeData(baseValue, overrideValue) {
   if (overrideValue == null) {
     return baseValue ?? null
   }
