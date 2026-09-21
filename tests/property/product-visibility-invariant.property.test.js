@@ -239,20 +239,31 @@ function makeFakeQuery(model) {
 }
 
 /**
+ * A customer's ONE storefront shop: the primary allocation (here: the first id
+ * in the deterministic order), as a one-element list — [] when unallocated.
+ * Mirrors `AllocationService.getStorefrontShopIds`, the rule the product,
+ * theme, banner and category endpoints (and a guest's storefront token) share.
+ * The visibility predicate is defined over THIS set, not over every allocated
+ * shop.
+ *
+ * @param {string[]|undefined} ids
+ */
+function storefrontShopOf(ids) {
+  const sorted = [...(ids || [])].sort()
+  return sorted.length > 0 ? [sorted[0]] : []
+}
+
+/**
  * Build a stub AllocationService that returns each customer's
- * pre-computed allocated_shop_ids from the model. Mirrors the real
- * service's `getShopIdsForUser` contract (deterministic ordering,
- * empty array on miss).
+ * pre-computed storefront shop from the model.
  *
  * @param {Map<string, string[]>} customerAllocations
  */
 function makeAllocationServiceStub(customerAllocations) {
   return {
-    getShopIdsForUser: vi.fn(async (userId) => {
-      const ids = customerAllocations.get(userId) || []
-      // Sort to keep ordering deterministic across iterations.
-      return [...ids].sort()
-    }),
+    getStorefrontShopIds: vi.fn(async (userId) =>
+      storefrontShopOf(customerAllocations.get(userId))
+    ),
   }
 }
 
@@ -370,8 +381,9 @@ describe('Property 2: Product Visibility Invariant — exact set', () => {
         const repo = new ProductsRepository()
 
         for (const customer of model.customers) {
-          const allocatedShopIds =
-            model.customerAllocations.get(customer.id) || []
+          const allocatedShopIds = storefrontShopOf(
+            model.customerAllocations.get(customer.id)
+          )
           const allocationService = makeAllocationServiceStub(
             model.customerAllocations
           )
@@ -408,8 +420,9 @@ describe('Property 2: Product Visibility Invariant — soundness', () => {
         const repo = new ProductsRepository()
 
         for (const customer of model.customers) {
-          const allocatedShopIds =
-            model.customerAllocations.get(customer.id) || []
+          const allocatedShopIds = storefrontShopOf(
+            model.customerAllocations.get(customer.id)
+          )
           const allocationService = makeAllocationServiceStub(
             model.customerAllocations
           )
@@ -443,8 +456,9 @@ describe('Property 2: Product Visibility Invariant — completeness', () => {
         const repo = new ProductsRepository()
 
         for (const customer of model.customers) {
-          const allocatedShopIds =
-            model.customerAllocations.get(customer.id) || []
+          const allocatedShopIds = storefrontShopOf(
+            model.customerAllocations.get(customer.id)
+          )
           const allocationService = makeAllocationServiceStub(
             model.customerAllocations
           )

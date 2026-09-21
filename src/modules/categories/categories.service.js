@@ -22,33 +22,27 @@ export class CategoriesService {
   }
 
   /**
-   * Resolve the customer's allocated shop_ids for product visibility.
+   * Resolve the shops a category's products may come from — the SAME rule as
+   * the product and theme endpoints:
+   *   - null      staff/admin (no customer context): unscoped
+   *   - shopIds   a guest's signed storefront token: exactly those shops
+   *   - [primary] a signed-in customer's primary allocation
+   *   - []        nothing resolved: an empty page, never the master catalogue
    *
-   * FIX: When the customer has ZERO allocations (hasn't set a delivery
-   * address yet), return null instead of []. Returning null causes the
-   * caller to skip the allocation filter entirely (anonymous/unscoped
-   * behavior) so real users who haven't added an address still see products.
+   * Errors are logged and treated as "no shop" (fail closed).
    *
-   * Once the user adds an address and allocation runs, the next request
-   * correctly scopes to their allocated shops.
-   *
-   * @param {{ userId?: string }|null|undefined} customerContext
+   * @param {{ userId?: string, shopIds?: string[] }|null|undefined} customerContext
    * @returns {Promise<string[]|null>}
    */
   async _resolveAllocatedShopIds(customerContext) {
-    if (!customerContext || !customerContext.userId) return null
+    if (!customerContext) return null
+    if (Array.isArray(customerContext.shopIds)) return customerContext.shopIds
+    if (!customerContext.userId) return null
     try {
-      const ids = await this.allocationService.getShopIdsForUser(
+      const ids = await this.allocationService.getStorefrontShopIds(
         customerContext.userId
       )
-      if (Array.isArray(ids) && ids.length === 0) {
-        logger.debug(
-          { customerId: customerContext.userId, action: 'categories.allocation_fallback' },
-          'Customer has no allocated shops — falling back to anonymous visibility'
-        )
-        return null
-      }
-      return Array.isArray(ids) ? ids : null
+      return Array.isArray(ids) ? ids : []
     } catch (err) {
       logger.error(
         {
@@ -56,9 +50,9 @@ export class CategoriesService {
           err: err.message,
           action: 'categories.resolve_allocations',
         },
-        'Failed to resolve customer allocations; falling back to anonymous visibility'
+        'Failed to resolve customer allocations; returning no products'
       )
-      return null
+      return []
     }
   }
 

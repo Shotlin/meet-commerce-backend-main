@@ -1,4 +1,5 @@
 import { success, error } from '../../utils/apiResponse.js'
+import { resolveCustomerContext } from '../products/products.controller.js'
 
 /**
  * Categories controller — thin HTTP layer
@@ -31,11 +32,11 @@ export class CategoriesController {
 
   /** GET /:id/products */
   async getProducts(request, reply) {
-    const user = request?.user
-    const customerContext =
-      user && user.id && (!user.role || user.role === 'CUSTOMER')
-        ? { userId: user.id }
-        : null
+    // Same context as the product endpoints: a signed-in customer ({userId}),
+    // a guest with a signed storefront token ({shopIds}), an anonymous caller
+    // with none ({shopIds: []}), or null for staff/admin (unscoped). A guest
+    // used to get null here — i.e. the whole master catalogue.
+    const customerContext = await resolveCustomerContext(request)
     const result = await this.service.getProducts(
       request.params.id,
       request.query,

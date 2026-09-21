@@ -57,22 +57,13 @@ export class PublicThemeController {
   }
 
   /**
-   * Resolve which physical shop's theme this request should see — the
-   * customer's primary allocated shop when authenticated and allocated,
-   * else null (the platform-default theme). Mirrors how product visibility
-   * is already resolved from `user_shop_allocations` elsewhere.
+   * Resolve which physical shop's theme this request should see. Identical to
+   * `_resolveThemeShopId` — a signed-in customer's primary allocation OR a
+   * guest's signed storefront token — so `/theme/active`, `/theme/tabs`,
+   * sections and tab-home can never disagree about the shop.
    */
   async _resolveShopId(request) {
-    const userId = request.user?.id
-    if (!userId) return null
-    try {
-      const { shops } = await this.allocationService.getForUser(userId)
-      const primary = shops?.find((s) => s.is_primary) ?? shops?.[0] ?? null
-      return primary?.shop_id ?? null
-    } catch (err) {
-      logger.error({ err, userId }, 'Failed to resolve shop for theme lookup')
-      return null
-    }
+    return this._resolveThemeShopId(request)
   }
 
   /**
@@ -94,7 +85,9 @@ export class PublicThemeController {
       return customerContext.shopIds
     }
     try {
-      const ids = await this.allocationService.getShopIdsForUser(customerContext.userId)
+      // The customer's ONE storefront shop (primary allocation) — the same
+      // set a guest's storefront token carries — not every allocated shop.
+      const ids = await this.allocationService.getStorefrontShopIds(customerContext.userId)
       return Array.isArray(ids) ? ids : []
     } catch (err) {
       logger.error(
@@ -202,9 +195,8 @@ export class PublicThemeController {
 
     if (!customerContext.userId) return null
     try {
-      const { shops } = await this.allocationService.getForUser(customerContext.userId)
-      const primary = shops?.find((shop) => shop.is_primary) ?? shops?.[0]
-      return primary?.shop_id || null
+      const [shopId] = await this.allocationService.getStorefrontShopIds(customerContext.userId)
+      return shopId || null
     } catch (err) {
       logger.error({ err, userId: customerContext.userId }, 'Failed to resolve shop for tab theme lookup')
       return null
@@ -288,6 +280,10 @@ export class PublicThemeController {
     const responseData = {
       store_key: storeKey,
       tab_key: tab.key,
+      // The shop these products were resolved for. Clients compare it with the
+      // shop they asked for and refuse to store a mismatching (e.g. anonymous)
+      // response under a real shop's cache key.
+      shop_id: allocatedShopIds?.[0] ?? null,
       seasonal_products: seasonalProducts,
       featured_products: featuredProducts,
       deal_products: dealProducts,
@@ -480,6 +476,8 @@ export class PublicThemeController {
     const responseData = {
       tab_key: tabKey,
       store_key: storeKey,
+      // See getTabHomeContent: lets clients verify the response's shop scope.
+      shop_id: shopId,
       sections: resolvedSections,
     }
     const etag = createHash('md5').update(JSON.stringify(responseData)).digest('hex')

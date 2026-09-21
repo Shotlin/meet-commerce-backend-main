@@ -67,7 +67,7 @@ function makeRepoMock() {
 
 function makeAllocationServiceMock(shopIds) {
   return {
-    getShopIdsForUser: vi.fn().mockResolvedValue(shopIds),
+    getStorefrontShopIds: vi.fn().mockResolvedValue(shopIds),
   }
 }
 
@@ -119,7 +119,7 @@ describe('ProductsService.list — customer scoping (Req 1.5, 4.5, 11.5)', () =>
     const svc = new ProductsService(repo, { allocationService: allocation })
     const result = await svc.list({ page: 1, limit: 20 }, { userId: CUSTOMER_ID })
 
-    expect(allocation.getShopIdsForUser).toHaveBeenCalledWith(CUSTOMER_ID)
+    expect(allocation.getStorefrontShopIds).toHaveBeenCalledWith(CUSTOMER_ID)
     expect(repo.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         page: 1,
@@ -155,7 +155,7 @@ describe('ProductsService.list — customer scoping (Req 1.5, 4.5, 11.5)', () =>
     const svc = new ProductsService(repo, { allocationService: allocation })
     await svc.list({ page: 1, limit: 20 }, null)
 
-    expect(allocation.getShopIdsForUser).not.toHaveBeenCalled()
+    expect(allocation.getStorefrontShopIds).not.toHaveBeenCalled()
     expect(repo.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ allocatedShopIds: null })
     )
@@ -223,7 +223,7 @@ describe('ProductsService.list — customer scoping (Req 1.5, 4.5, 11.5)', () =>
   it('falls back to empty visibility when allocation lookup throws (fail-closed)', async () => {
     const repo = makeRepoMock()
     const allocation = {
-      getShopIdsForUser: vi.fn().mockRejectedValue(new Error('redis down')),
+      getStorefrontShopIds: vi.fn().mockRejectedValue(new Error('redis down')),
     }
 
     const svc = new ProductsService(repo, { allocationService: allocation })

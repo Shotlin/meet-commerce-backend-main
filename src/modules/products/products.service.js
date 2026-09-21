@@ -102,15 +102,13 @@ export class ProductsService {
     if (Array.isArray(customerContext?.shopIds)) return customerContext.shopIds;
     if (!customerContext || !customerContext.userId) return null;
     try {
-      const allocation = await this.allocationService.getForUser(
+      // A customer has one active storefront: the primary match for their
+      // current delivery address (a guest's token carries the same single
+      // shop). [] is intentional when nothing is resolved: a user without a
+      // resolved address must never fall back to master-catalog visibility.
+      return await this.allocationService.getStorefrontShopIds(
         customerContext.userId,
       );
-      const primary = allocation?.shops?.find((shop) => shop.is_primary);
-      // A customer has one active storefront: the primary match for their
-      // current delivery address. Returning [] here is intentional: a user
-      // without a resolved address must never fall back to master-catalog
-      // visibility.
-      return primary?.shop_id ? [primary.shop_id] : [];
     } catch (err) {
       logger.error(
         {

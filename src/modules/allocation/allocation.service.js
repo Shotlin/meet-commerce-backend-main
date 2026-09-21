@@ -107,6 +107,28 @@ export class AllocationService {
   }
 
   /**
+   * The ONE definition of "the shop a customer's storefront is served from":
+   * the primary allocation (first allocation if none is flagged), as a
+   * one-element list — or [] when the customer has no allocation.
+   *
+   * A guest's signed storefront token carries exactly the primary shop that
+   * `resolveForLocation` picked, so a guest and a signed-in customer at the
+   * same location get the SAME list here. Theme, sections, tab-home, banners,
+   * products and category products must all derive their shop from this (or
+   * from the guest token) — never from `getShopIdsForUser`, which returns every
+   * allocated shop and is only for cart/order flows.
+   *
+   * @param {string} userId
+   * @returns {Promise<string[]>}
+   */
+  async getStorefrontShopIds(userId) {
+    const data = await this.getForUser(userId);
+    const shops = Array.isArray(data?.shops) ? data.shops : [];
+    const primary = shops.find((shop) => shop.is_primary) ?? shops[0];
+    return primary?.shop_id ? [primary.shop_id] : [];
+  }
+
+  /**
    * Resolve stores for a location without writing an account allocation.
    * Used by the guest storefront gate: location remains on the device and
    * this method only returns the serviceable store set for a signed session.
