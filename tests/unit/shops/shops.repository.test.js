@@ -134,3 +134,29 @@ describe('ShopsRepository.update — never resurrects soft-deleted rows (Req 15.
     expect(sql).toMatch(/AND\s+deleted_at\s+IS\s+NULL/i)
   })
 })
+
+
+describe('ShopsRepository — serviceable_pincodes are cleaned on every write path', () => {
+  it('update() persists a whitespace-stripped, de-duplicated list', async () => {
+    const repo = new ShopsRepository()
+    await repo.update(SHOP_ID, { serviceable_pincodes: ['201301', ' 201301', '', '700 016', '201301'] })
+
+    const [sql, params] = databaseMock.query.mock.calls[0]
+    expect(sql).toMatch(/serviceable_pincodes\s*=\s*\$\d+/)
+    expect(params).toContainEqual(['201301', '700016'])
+  })
+
+  it('create() persists a whitespace-stripped, de-duplicated list', async () => {
+    databaseMock.query.mockResolvedValue({ rows: [{ id: SHOP_ID }], rowCount: 1 })
+    const repo = new ShopsRepository()
+    await repo.create({
+      name: 'S', slug: 's', branch_code: 'KOL001',
+      address_line1: 'a', city: 'Kolkata', state: 'WB', pincode: '700001',
+      lat: 22.5, lng: 88.3, delivery_radius_km: 5, commission_rate: 10,
+      serviceable_pincodes: ['201301', '201301'],
+    })
+
+    const [, params] = databaseMock.query.mock.calls[0]
+    expect(params).toContainEqual(['201301'])
+  })
+})

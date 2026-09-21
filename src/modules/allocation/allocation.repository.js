@@ -321,7 +321,8 @@ export class AllocationRepository {
   /**
    * Page through users whose default address pincode matches the given
    * shop's serviceable_pincodes OR whose default address falls inside the
-   * shop's delivery_radius_km.
+   * shop's delivery_radius_km OR who already hold an allocation to this shop
+   * (so allocations invalidated by the edit get removed, not left stale).
    *
    * Used by the allocation BullMQ worker to recompute allocations after a
    * shop's serviceable_pincodes or delivery_radius_km changes (Requirement 4.8).
@@ -373,6 +374,14 @@ export class AllocationRepository {
          CROSS JOIN target t
         WHERE (
                 addr.pincode = ANY(t.serviceable_pincodes)
+                -- Customers already allocated to this shop must be revisited
+                -- even when they no longer match its (edited) service area:
+                -- recompute is what REMOVES a stale allocation after a PIN is
+                -- deleted, the radius shrinks, or pincode_only is switched on.
+                OR EXISTS (
+                  SELECT 1 FROM user_shop_allocations ua
+                   WHERE ua.user_id = u.id AND ua.shop_id = t.id
+                )
                 OR (
                   NOT t.pincode_only
                   AND addr.lat IS NOT NULL AND addr.lng IS NOT NULL

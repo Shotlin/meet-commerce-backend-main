@@ -1,4 +1,5 @@
 import { query } from '../../config/database.js'
+import { cleanPincodeList } from '../../utils/pincode.js'
 
 /**
  * Shops repository — all SQL queries for shops
@@ -50,7 +51,7 @@ export class ShopsRepository {
         data.address_line1, data.address_line2 || null,
         data.city, data.state, data.pincode,
         data.lat, data.lng,
-        data.serviceable_pincodes || [],
+        cleanPincodeList(data.serviceable_pincodes),
         data.delivery_radius_km,
         data.pincode_only ?? false,
         JSON.stringify(data.operating_hours || {}),
@@ -271,7 +272,7 @@ export class ShopsRepository {
     // Handle JSON/array fields separately
     if (data.serviceable_pincodes !== undefined) {
       fields.push(`serviceable_pincodes = $${idx++}`)
-      params.push(data.serviceable_pincodes)
+      params.push(cleanPincodeList(data.serviceable_pincodes))
     }
 
     if (data.operating_hours !== undefined) {

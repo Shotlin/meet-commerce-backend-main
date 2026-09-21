@@ -576,3 +576,43 @@ describe('AllocationService.enqueueShopAreaChange() — job naming + logging', (
     )
   })
 })
+
+
+describe('AllocationService — PIN normalisation before matching', () => {
+  it('resolveForLocation() passes a whitespace-stripped PIN to the pincode query', async () => {
+    const repo = createRepoMock()
+    repo.findShopsByPincode.mockResolvedValue([])
+    repo.findShopsByRadius.mockResolvedValue([])
+    const service = new AllocationService(repo, { queue: { add: vi.fn() } })
+
+    await service.resolveForLocation({ lat: 28.5, lng: 77.4, pincode: ' 201 301 ' })
+
+    expect(repo.findShopsByPincode).toHaveBeenCalledWith('201301', { lat: 28.5, lng: 77.4 })
+  })
+
+  it('resolveForLocation() with no PIN skips the pincode query (radius-only matching)', async () => {
+    const repo = createRepoMock()
+    repo.findShopsByPincode.mockResolvedValue([])
+    repo.findShopsByRadius.mockResolvedValue([])
+    const service = new AllocationService(repo, { queue: { add: vi.fn() } })
+
+    await service.resolveForLocation({ lat: 28.5, lng: 77.4 })
+    await service.resolveForLocation({ lat: 28.5, lng: 77.4, pincode: '   ' })
+
+    expect(repo.findShopsByPincode).not.toHaveBeenCalled()
+    expect(repo.findShopsByRadius).toHaveBeenCalledTimes(2)
+  })
+
+  it('computeAndUpsertForUser() matches on the whitespace-stripped PIN', async () => {
+    const repo = createRepoMock()
+    repo.findShopsByPincode.mockResolvedValue([])
+    repo.findShopsByRadius.mockResolvedValue([])
+    repo.replaceForUser.mockResolvedValue(0)
+    repo.findByUserId.mockResolvedValue([])
+    const service = new AllocationService(repo, { queue: { add: vi.fn() } })
+
+    await service.computeAndUpsertForUser('u1', { lat: 28.5, lng: 77.4, pincode: ' 201301\n' })
+
+    expect(repo.findShopsByPincode).toHaveBeenCalledWith('201301', { lat: 28.5, lng: 77.4 })
+  })
+})

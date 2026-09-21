@@ -5,6 +5,11 @@ import { AllocationService } from '../allocation/allocation.service.js'
 import { AllocationRepository } from '../allocation/allocation.repository.js'
 import { PincodeMappingsRepository } from '../pincode-mappings/pincode-mappings.repository.js'
 import { FeeSettingsRepository } from '../fee-settings/fee-settings.repository.js'
+import { cleanPincode } from '../../utils/pincode.js'
+import {
+  getCachedServiceablePincodes,
+  setCachedServiceablePincodes,
+} from '../../utils/serviceable-pincode-cache.js'
 
 // Fallback ETA used only if fee_settings has no GLOBAL row yet or the
 // lookup errors — keeps validate-pincode working exactly as before this
@@ -24,15 +29,13 @@ export const ADDRESS_RETENTION_DAYS = 40
 // which missed pincodes added to individual shops. This version queries
 // the shops table directly so any pincode in any active shop's
 // serviceable_pincodes array is immediately available to customers.
-let cachedPincodes = null
-let pincodesCacheTime = 0
-const PINCODE_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
-
+// Cached for 5 minutes in-process (src/utils/serviceable-pincode-cache.js);
+// ShopsService drops that cache whenever a shop's service area changes.
+// Stored entries are whitespace-stripped on read too, so rows written before
+// PIN normalisation existed still match.
 async function getServiceablePincodes() {
-  const now = Date.now()
-  if (cachedPincodes && (now - pincodesCacheTime) < PINCODE_CACHE_TTL) {
-    return cachedPincodes
-  }
+  const cached = getCachedServiceablePincodes()
+  if (cached !== undefined) return cached
 
   try {
     // Flatten all serviceable_pincodes arrays from every active, non-deleted shop
@@ -44,19 +47,21 @@ async function getServiceablePincodes() {
           AND array_length(serviceable_pincodes, 1) > 0`
     )
 
-    if (rows.length > 0) {
-      cachedPincodes = new Set(rows.map((r) => String(r.pincode)))
-    } else {
-      // No shops configured yet — allow all pincodes so the app isn't blocked
-      cachedPincodes = null
-    }
+    const pincodes = new Set(
+      rows.map((r) => cleanPincode(r.pincode)).filter(Boolean)
+    )
+    // No shops configured yet — allow all pincodes so the app isn't blocked
+    const value = pincodes.size > 0 ? pincodes : null
 
-    pincodesCacheTime = now
+    // Only a real PIN set is cached. The "allow all" result (null) is
+    // re-queried every call, exactly as before, so the first shop that gets
+    // a PIN configured takes effect immediately.
+    if (value) setCachedServiceablePincodes(value)
     logger.info(
-      { count: cachedPincodes ? cachedPincodes.size : 'all' },
+      { count: value ? value.size : 'all' },
       'Serviceable pincodes loaded from active shops'
     )
-    return cachedPincodes
+    return value
   } catch (err) {
     logger.error({ err }, 'Failed to load serviceable pincodes from shops — allowing all')
     return null // null = allow all, so the app never gets stuck
@@ -326,8 +331,11 @@ export class AddressesService {
 
     const serviceablePincodes = await getServiceablePincodes()
 
-    // null means no shops configured — allow all so the app isn't blocked
-    const available = serviceablePincodes === null || serviceablePincodes.has(String(pincode))
+    // null means no shops configured — allow all so the app isn't blocked.
+    // The queried PIN is normalised the same way stored PINs are.
+    const available =
+      serviceablePincodes === null ||
+      serviceablePincodes.has(cleanPincode(pincode))
     return {
       available,
       deliveryFee: available ? 29 : 0,

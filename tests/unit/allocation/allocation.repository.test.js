@@ -361,6 +361,19 @@ describe('AllocationRepository.findUsersAffectedByShop()', () => {
     expect(params).toEqual([SHOP_A, USER_ID, 50])
   })
 
+  it('also selects users who already hold an allocation to the shop, so stale allocations get recomputed away', async () => {
+    query.mockResolvedValue({ rows: [] })
+
+    await repo.findUsersAffectedByShop(SHOP_A, { limit: 10 })
+
+    const text = normalize(query.mock.calls[0][0])
+    expect(text).toContain('FROM user_shop_allocations ua')
+    expect(text).toMatch(/ua\.user_id = u\.id AND ua\.shop_id = t\.id/)
+    // Existing matching rules are untouched.
+    expect(text).toContain('addr.pincode = ANY(t.serviceable_pincodes)')
+    expect(text).toContain('NOT t.pincode_only')
+  })
+
   it('omits the cursor clause when afterUserId is null', async () => {
     query.mockResolvedValue({ rows: [] })
 

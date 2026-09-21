@@ -32,6 +32,59 @@ describe('createShopSchema', () => {
     }
   })
 
+  describe('serviceable_pincodes normalisation', () => {
+    it('stores a duplicated PIN once ("201301, 201301")', () => {
+      const parsed = createShopSchema.safeParse({
+        ...VALID_INPUT,
+        serviceable_pincodes: ['201301', '201301'],
+      })
+      expect(parsed.success).toBe(true)
+      if (parsed.success) expect(parsed.data.serviceable_pincodes).toEqual(['201301'])
+    })
+
+    it('trims, strips inner whitespace, drops blanks, dedupes preserving order', () => {
+      const parsed = createShopSchema.safeParse({
+        ...VALID_INPUT,
+        serviceable_pincodes: [' 700016', '201 301', '', '  ', '700016 ', '201301'],
+      })
+      expect(parsed.success).toBe(true)
+      if (parsed.success) {
+        expect(parsed.data.serviceable_pincodes).toEqual(['700016', '201301'])
+      }
+    })
+
+    it('rejects an entry that is not a valid 6-digit PIN', () => {
+      for (const bad of ['2013', '20130a', '012345', '2013011']) {
+        const parsed = createShopSchema.safeParse({
+          ...VALID_INPUT,
+          serviceable_pincodes: ['201301', bad],
+        })
+        expect(parsed.success).toBe(false)
+      }
+    })
+
+    it('still defaults to [] when omitted', () => {
+      const parsed = createShopSchema.safeParse(VALID_INPUT)
+      expect(parsed.success && parsed.data.serviceable_pincodes).toEqual([])
+    })
+
+    it('applies the same normalisation on update, and leaves it undefined when omitted', () => {
+      const updated = updateShopSchema.safeParse({ serviceable_pincodes: ['201301', ' 201301'] })
+      expect(updated.success && updated.data.serviceable_pincodes).toEqual(['201301'])
+
+      const untouched = updateShopSchema.safeParse({ name: 'X' })
+      expect(untouched.success && 'serviceable_pincodes' in untouched.data).toBe(false)
+
+      const bad = updateShopSchema.safeParse({ serviceable_pincodes: ['12'] })
+      expect(bad.success).toBe(false)
+    })
+
+    it('allows clearing the list with []', () => {
+      const parsed = updateShopSchema.safeParse({ serviceable_pincodes: [] })
+      expect(parsed.success && parsed.data.serviceable_pincodes).toEqual([])
+    })
+  })
+
   describe('required fields', () => {
     const requiredKeys = [
       'name',

@@ -23,10 +23,15 @@ export default async function storefrontRoutes(fastify) {
           properties: {
             lat: { type: "number", minimum: -90, maximum: 90 },
             lng: { type: "number", minimum: -180, maximum: 180 },
-            // Reverse geocoders occasionally omit postal_code even when the
-            // device location is precise. Coordinates still let radius-based
-            // stores resolve safely; pincode-only stores remain excluded.
-            pincode: { type: "string", minLength: 3, maxLength: 10 },
+            // The customer's PIN, taken by the client from the device's
+            // geocoder BEFORE this call. A store configured "pincode only"
+            // matches on this alone (no distance check), so clients must send
+            // it whenever they can. Reverse geocoders occasionally omit
+            // postal_code even when the device location is precise; then
+            // coordinates still let radius-based stores resolve, and
+            // pincode-only stores remain excluded. Whitespace is stripped
+            // server-side (AllocationService.resolveForLocation).
+            pincode: { type: "string", maxLength: 20 },
           },
           additionalProperties: false,
         },

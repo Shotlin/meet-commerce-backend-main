@@ -1,8 +1,21 @@
 import { z } from 'zod'
+import { cleanPincodeList, isValidPincode } from '../../utils/pincode.js'
 
 /**
  * Shops module — Zod validation schemas
  */
+
+// Service-area PIN list. Serviceability matches PINs by exact string equality,
+// so the list is normalised at the API boundary: whitespace stripped, blanks
+// dropped, duplicates removed (order kept). Anything left that is not a valid
+// 6-digit PIN is rejected with an explicit message rather than being stored
+// as an entry that can never match a customer.
+const serviceablePincodesField = z
+  .array(z.string())
+  .transform(cleanPincodeList)
+  .refine((pins) => pins.every(isValidPincode), {
+    message: 'Each serviceable pincode must be a valid 6-digit PIN code',
+  })
 
 // ─── CREATE SHOP ─────────────────────────────────────────
 export const createShopSchema = z.object({
@@ -19,7 +32,7 @@ export const createShopSchema = z.object({
   pincode: z.string().min(1).max(10),
   lat: z.number().min(-90).max(90),
   lng: z.number().min(-180).max(180),
-  serviceable_pincodes: z.array(z.string().max(10)).default([]),
+  serviceable_pincodes: serviceablePincodesField.default([]),
   delivery_radius_km: z.number().min(0.5).max(100).default(5.0),
   // When true, this shop is matchable ONLY via serviceable_pincodes —
   // delivery_radius_km is never used as a fallback match (migration 086).
@@ -49,7 +62,7 @@ export const updateShopSchema = z.object({
   pincode: z.string().min(1).max(10).optional(),
   lat: z.number().min(-90).max(90).optional(),
   lng: z.number().min(-180).max(180).optional(),
-  serviceable_pincodes: z.array(z.string().max(10)).optional(),
+  serviceable_pincodes: serviceablePincodesField.optional(),
   delivery_radius_km: z.number().min(0.5).max(100).optional(),
   pincode_only: z.boolean().optional(),
   is_active: z.boolean().optional(),

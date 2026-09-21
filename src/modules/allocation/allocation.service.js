@@ -1,6 +1,7 @@
 import { cacheGet, cacheSet, cacheDel } from "../../utils/cache.js";
 import { logger } from "../../config/logger.js";
 import { allocationQueue } from "../../config/bullmq.js";
+import { cleanPincode } from "../../utils/pincode.js";
 
 /**
  * Allocation service — pure business logic for user-shop allocation.
@@ -113,7 +114,10 @@ export class AllocationService {
   async resolveForLocation(address) {
     const lat = Number(address?.lat);
     const lng = Number(address?.lng);
-    const pincode = String(address?.pincode || "").trim();
+    // Whitespace-stripped so it compares equal to the (normalised) PINs stored
+    // on shops. A missing PIN is not an error: matching falls back to
+    // coordinates only, exactly as it does when the client sends no PIN.
+    const pincode = cleanPincode(address?.pincode);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
       return {
         success: false,
@@ -293,7 +297,10 @@ export class AllocationService {
 
     const lat = address?.lat;
     const lng = address?.lng;
-    const pincode = address?.pincode;
+    // Same whitespace normalisation the shop side stores its PINs with (see
+    // utils/pincode.js) so an exact-string match cannot be defeated by a
+    // stray space. Blank counts as "no pincode".
+    const pincode = cleanPincode(address?.pincode);
 
     // Requirement 4.6 — coordinates are mandatory for allocation
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {

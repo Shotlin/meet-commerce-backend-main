@@ -29,6 +29,11 @@ import {
   cacheDeletePattern,
 } from '../../../src/utils/cache.js'
 import { logger } from '../../../src/config/logger.js'
+import {
+  getCachedServiceablePincodes,
+  setCachedServiceablePincodes,
+} from '../../../src/utils/serviceable-pincode-cache.js'
+import { allocationQueue } from '../../../src/config/bullmq.js'
 
 // ─── Helpers ─────────────────────────────────────────────
 function createRepoMock() {
@@ -479,5 +484,88 @@ describe('ShopsService.generateBranchCode()', () => {
 
     // "New Delhi-1" -> uppercase letters only -> "NEWDELHI" -> first 3 -> "NEW"
     expect(code).toBe('NEW001')
+  })
+})
+
+
+// ═══════════════════════════════════════════════════════════
+// Service-area edits must not leave stale PIN / allocation state behind
+// ═══════════════════════════════════════════════════════════
+describe('ShopsService — service-area change side effects', () => {
+  const SHOP_ID = '550e8400-e29b-41d4-a716-446655440000'
+  const USER_ID = '660e8400-e29b-41d4-a716-446655440000'
+  let repo
+  let service
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    repo = createRepoMock()
+    service = new ShopsService(repo)
+    setCachedServiceablePincodes(new Set(['700016']))
+  })
+
+  const shopRow = (pins) => ({
+    id: SHOP_ID,
+    name: 'Kolkata',
+    lat: 22.57,
+    lng: 88.36,
+    serviceable_pincodes: pins,
+    delivery_radius_km: 5,
+    pincode_only: true,
+  })
+
+  it('update() drops the in-process validate-pincode cache', async () => {
+    repo.findById.mockResolvedValue(shopRow(['700016']))
+    repo.update.mockResolvedValue(shopRow(['700016', '201301']))
+
+    await service.update(SHOP_ID, { serviceable_pincodes: ['700016', '201301'] }, USER_ID)
+
+    expect(getCachedServiceablePincodes()).toBeUndefined()
+  })
+
+  it('update() enqueues an allocation recompute when the PIN list changes', async () => {
+    repo.findById.mockResolvedValue(shopRow(['700016']))
+    repo.update.mockResolvedValue(shopRow(['700016', '201301']))
+
+    await service.update(SHOP_ID, { serviceable_pincodes: ['700016', '201301'] }, USER_ID)
+
+    expect(allocationQueue.add).toHaveBeenCalledWith(
+      'recompute-by-shop',
+      { type: 'recompute-by-shop', shopId: SHOP_ID },
+      { jobId: `recompute-by-shop:${SHOP_ID}` }
+    )
+  })
+
+  it('update() does NOT enqueue a recompute when the cleaned list is unchanged', async () => {
+    repo.findById.mockResolvedValue(shopRow(['201301']))
+    repo.update.mockResolvedValue(shopRow(['201301']))
+
+    // Legacy dirty input that normalises to the stored list.
+    await service.update(SHOP_ID, { serviceable_pincodes: [' 201301 ', '201301'] }, USER_ID)
+
+    expect(allocationQueue.add).not.toHaveBeenCalled()
+  })
+
+  it('update() recomputes when an existing dirty row is cleaned (stored [201301, 201301] → [201301])', async () => {
+    repo.findById.mockResolvedValue(shopRow(['201301', '201301']))
+    repo.update.mockResolvedValue(shopRow(['201301']))
+
+    await service.update(SHOP_ID, { serviceable_pincodes: ['201301'] }, USER_ID)
+
+    expect(allocationQueue.add).toHaveBeenCalledTimes(1)
+  })
+
+  it('create() and delete() also drop the validate-pincode cache', async () => {
+    repo.findSlugsLike.mockResolvedValue([])
+    repo.findByBranchCode.mockResolvedValue(null)
+    repo.create.mockResolvedValue({ id: SHOP_ID })
+    await service.create({ ...VALID_SHOP_INPUT }, USER_ID)
+    expect(getCachedServiceablePincodes()).toBeUndefined()
+
+    setCachedServiceablePincodes(new Set(['700016']))
+    repo.findById.mockResolvedValue(shopRow(['700016']))
+    repo.softDelete.mockResolvedValue(true)
+    await service.delete(SHOP_ID, USER_ID)
+    expect(getCachedServiceablePincodes()).toBeUndefined()
   })
 })

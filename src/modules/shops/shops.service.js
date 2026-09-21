@@ -2,6 +2,8 @@ import { cacheGet, cacheSet, cacheDel, cacheDeletePattern } from '../../utils/ca
 import { logger } from '../../config/logger.js'
 import { emit as emitAudit } from '../../utils/audit-log.js'
 import { allocationQueue } from '../../config/bullmq.js'
+import { invalidateServiceablePincodeCache } from '../../utils/serviceable-pincode-cache.js'
+import { cleanPincodeList } from '../../utils/pincode.js'
 
 const CACHE_PREFIX = 'bakaloo:shops:v1'
 const CACHE_TTL = 300 // 300 seconds
@@ -107,6 +109,8 @@ export class ShopsService {
 
     // Invalidate active shops list cache
     await cacheDeletePattern('bakaloo:shops:active:*')
+    // A new shop can add serviceable PINs — drop the validate-pincode cache
+    invalidateServiceablePincodeCache()
 
     logger.info({ userId, shopId: shop.id, action: 'shop_created' }, 'Shop created')
 
@@ -186,14 +190,19 @@ export class ShopsService {
     // Invalidate caches
     await cacheDel(`${CACHE_PREFIX}:${id}`)
     await cacheDeletePattern('bakaloo:shops:active:*')
+    // Service area / active flag may have changed: validate-pincode must see
+    // the dashboard edit now, not after its 5-minute in-process TTL.
+    invalidateServiceablePincodeCache()
 
     // Task 13.3: Trigger allocation recompute when serviceable_pincodes,
     // delivery_radius_km, or pincode_only changes (Requirements 4.8, 4.9).
     // Fire-and-forget — allocation recompute is a background job.
+    // Compared after normalising both sides so a legacy row with stray
+    // whitespace/duplicates is still detected as changed once it is cleaned.
     const pincodesChanged =
       data.serviceable_pincodes !== undefined &&
-      JSON.stringify(data.serviceable_pincodes) !==
-        JSON.stringify(existing.serviceable_pincodes)
+      JSON.stringify(cleanPincodeList(data.serviceable_pincodes)) !==
+        JSON.stringify(existing.serviceable_pincodes || [])
     const radiusChanged =
       data.delivery_radius_km !== undefined &&
       data.delivery_radius_km !== existing.delivery_radius_km
@@ -268,6 +277,7 @@ export class ShopsService {
     // Invalidate caches
     await cacheDel(`${CACHE_PREFIX}:${id}`)
     await cacheDeletePattern('bakaloo:shops:active:*')
+    invalidateServiceablePincodeCache()
 
     logger.info({ userId, shopId: id, action: 'shop_deleted' }, 'Shop soft-deleted')
 
