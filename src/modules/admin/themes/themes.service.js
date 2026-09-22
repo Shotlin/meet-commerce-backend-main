@@ -34,13 +34,17 @@ function broadcastThemeUpdate(theme, themeId) {
   }
 
   const storeKey = theme.store_key || 'zepto'
+  // null shopId = the shop-less/global theme changed, which can cascade to
+  // any shop without its own override — clients must not narrow on that.
+  const shopId = theme.shop_id ?? null
   io.to('themes:live').emit('theme:update', {
     tabKey,
     storeKey,
+    shopId,
     themeId,
     timestamp: new Date().toISOString(),
   })
-  logger.info({ tabKey, storeKey, themeId }, 'Theme update broadcasted to all users')
+  logger.info({ tabKey, storeKey, shopId, themeId }, 'Theme update broadcasted to all users')
 }
 
 export class ThemesService {

@@ -560,24 +560,25 @@ async function getTabManifestRows(storeKey, shopId = null) {
   return rows
 }
 
-function buildTabManifestResponse(storeKey, rows, shopId = null) {
+export function buildTabManifestResponse(storeKey, rows, shopId = null) {
   const fallbackTheme =
     rows.find((row) => row.tab_key === 'all' && row.theme_data)?.theme_data ?? null
 
   const tabs = rows.map((row) => {
-    // "All" is a layout fallback. Its header photo must not leak into a
-    // category that has its own theme, especially when that category sets its
-    // chrome colours transparent. Each category may still explicitly upload
-    // its own header image.
-    const isolateHeaderImage = row.tab_key !== 'all' && row.theme_data != null
+    // "All" is a layout fallback. Its header photo must not leak into any
+    // other category — INCLUDING a category that has never been given its own
+    // theme_data at all (row.theme_data == null). A brand-new tab (created in
+    // the builder but never customized) must render All's colors/layout
+    // through the normal cascade below, but never its header image, exactly
+    // like a tab that HAS its own theme_data with no image of its own. Each
+    // category may still explicitly upload its own header image.
+    const isolateHeaderImage = row.tab_key !== 'all'
     const themeData = mergeThemeData(
       isolateHeaderImage ? withoutFallbackHeaderImage(fallbackTheme) : fallbackTheme,
       row.theme_data
     )
     const variantBThemeData = mergeThemeData(
-      row.tab_key !== 'all' && row.variant_b_theme_data != null
-        ? withoutFallbackHeaderImage(fallbackTheme)
-        : fallbackTheme,
+      isolateHeaderImage ? withoutFallbackHeaderImage(fallbackTheme) : fallbackTheme,
       row.variant_b_theme_data
     )
 

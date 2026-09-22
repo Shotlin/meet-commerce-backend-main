@@ -37,15 +37,23 @@ export function getSocketIo() {
   return activeIo
 }
 
-export function emitSectionUpdate(io, tabKey, action) {
+// `storeKey`/`shopId` let every client decide LOCALLY whether this event is
+// about the storefront it is currently showing, instead of every connected
+// device (every shop, every store) re-fetching on every edit anywhere.
+// `shopId` is null for a change to the shop-less/global theme — that
+// genuinely can affect any shop that has no override of its own, so clients
+// must not narrow on a null shopId, only on a concrete one.
+export function emitSectionUpdate(io, { tabKey, storeKey = null, shopId = null, action }) {
   if (!io) return
 
   io.to('themes:live').emit('section:update', {
     tab_key: tabKey,
+    store_key: storeKey,
+    shop_id: shopId,
     action,
     timestamp: Date.now(),
   })
-  logger.info({ tabKey, action }, 'Section update broadcasted to all users')
+  logger.info({ tabKey, storeKey, shopId, action }, 'Section update broadcasted to all users')
 }
 
 /**

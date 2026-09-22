@@ -12,9 +12,9 @@ async function invalidateSectionCaches() {
   await cacheDeletePattern('bakaloo:tab_manifest:*')
 }
 
-function broadcastSectionUpdate(tabKey) {
+function broadcastSectionUpdate({ tabKey, storeKey = null, shopId = null }) {
   if (!tabKey) return
-  emitSectionUpdate(getSocketIo(), tabKey, 'update')
+  emitSectionUpdate(getSocketIo(), { tabKey, storeKey, shopId, action: 'update' })
 }
 
 export class SectionsService {
@@ -38,7 +38,7 @@ export class SectionsService {
     const createdSection = await repo.findById(section.id)
 
     await invalidateSectionCaches()
-    broadcastSectionUpdate(createdSection?.tab_key)
+    broadcastSectionUpdate({ tabKey: createdSection?.tab_key, storeKey: createdSection?.store_key, shopId: createdSection?.shop_id ?? null })
     logAdminActivity(adminId, 'CREATE_SECTION', 'section_manifest', section.id, null, null, ip)
     return createdSection
   }
@@ -56,7 +56,7 @@ export class SectionsService {
     if (!section) return null
 
     await invalidateSectionCaches()
-    broadcastSectionUpdate(existing.tab_key)
+    broadcastSectionUpdate({ tabKey: existing.tab_key, storeKey: existing.store_key, shopId: existing.shop_id ?? null })
     logAdminActivity(adminId, 'UPDATE_SECTION', 'section_manifest', id, null, null, ip)
     return repo.findById(id)
   }
@@ -69,7 +69,7 @@ export class SectionsService {
     if (!section) return null
 
     await invalidateSectionCaches()
-    broadcastSectionUpdate(existing.tab_key)
+    broadcastSectionUpdate({ tabKey: existing.tab_key, storeKey: existing.store_key, shopId: existing.shop_id ?? null })
     logAdminActivity(adminId, 'UPDATE_SECTION_MERCH', 'section_manifest', id, null, null, ip)
     return repo.findById(id)
   }
@@ -79,7 +79,7 @@ export class SectionsService {
     if (!section) return null
 
     await invalidateSectionCaches()
-    broadcastSectionUpdate(section.tab_key)
+    broadcastSectionUpdate({ tabKey: section.tab_key, storeKey: section.store_key, shopId: section.shop_id ?? null })
     logAdminActivity(adminId, 'DELETE_SECTION', 'section_manifest', id, null, null, ip)
     return section
   }
@@ -89,7 +89,7 @@ export class SectionsService {
     const tab = await repo.findTabById(tabId)
 
     await invalidateSectionCaches()
-    broadcastSectionUpdate(tab?.key)
+    broadcastSectionUpdate({ tabKey: tab?.key, storeKey: tab?.store_key, shopId })
     logAdminActivity(adminId, 'REORDER_SECTIONS', 'section_manifest', tabId, null, null, ip)
     return sections
   }
@@ -101,7 +101,7 @@ export class SectionsService {
     const duplicatedSection = await repo.findById(section.id)
 
     await invalidateSectionCaches()
-    broadcastSectionUpdate(duplicatedSection?.tab_key)
+    broadcastSectionUpdate({ tabKey: duplicatedSection?.tab_key, storeKey: duplicatedSection?.store_key, shopId: duplicatedSection?.shop_id ?? null })
     logAdminActivity(adminId, 'DUPLICATE_SECTION', 'section_manifest', section.id, null, null, ip)
     return duplicatedSection
   }
@@ -123,7 +123,7 @@ export class SectionsService {
     const tab = await repo.findTabById(tabId)
 
     await invalidateSectionCaches()
-    broadcastSectionUpdate(tab?.key)
+    broadcastSectionUpdate({ tabKey: tab?.key, storeKey: tab?.store_key, shopId: null })
     logAdminActivity(adminId, 'ROLLBACK_SECTIONS', 'section_manifest', tabId, null, null, ip)
     return sections
   }
