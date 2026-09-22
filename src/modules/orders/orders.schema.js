@@ -31,6 +31,10 @@ export const PlaceMobileOrderSchema = {
     scheduledSlotLabel: { type: 'string', maxLength: 100 },
     quickDeliverySelected: { type: 'boolean' },
     useWallet: { type: 'boolean' },
+    // Idempotency key — one per checkout attempt, reused only when the
+    // mobile app retries that exact same attempt. See
+    // OrdersService#placeOrder's doc comment.
+    clientOrderRef: { type: 'string', format: 'uuid' },
   },
   additionalProperties: false,
 }

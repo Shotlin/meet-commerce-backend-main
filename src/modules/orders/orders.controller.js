@@ -61,4 +61,48 @@ export class OrdersController {
     const orders = await this.service.listOrders(params)
     return reply.status(200).send({ success: true, data: orders })
   }
+
+  getActiveOrder = async (req, reply) => {
+    const customerId = req.userId || req.user.id
+    const order = await this.service.getActiveOrder(customerId)
+    if (!order) {
+      return reply.status(404).send({ success: false, message: 'No active order' })
+    }
+    return reply.status(200).send({ success: true, data: order })
+  }
+
+  cancelOrder = async (req, reply) => {
+    const customerId = req.userId || req.user.id
+    const { orderId } = req.params
+    const result = await this.service.cancelOrder(customerId, orderId, req.body?.reason)
+    if (result.paymentConfirmed) {
+      return reply.status(409).send({
+        success: false,
+        paymentConfirmed: true,
+        message: 'This order is already paid and cannot be cancelled.',
+        data: result.order,
+      })
+    }
+    return reply.status(200).send({ success: true, data: result.order })
+  }
+
+  reorder = async (req, reply) => {
+    const customerId = req.userId || req.user.id
+    const { orderId } = req.params
+    const result = await this.service.reorder(customerId, orderId)
+    return reply.status(200).send({ success: true, data: result })
+  }
+
+  getInvoice = async (req, reply) => {
+    const customerId = req.userId || req.user.id
+    const { orderId } = req.params
+    const result = await this.service.getInvoice(customerId, orderId)
+    if (!result.success) {
+      return reply.status(result.statusCode || 400).send({ success: false, message: result.message })
+    }
+    return reply
+      .type('application/pdf')
+      .header('Content-Disposition', `attachment; filename=invoice-${result.orderNumber}.pdf`)
+      .send(result.buffer)
+  }
 }

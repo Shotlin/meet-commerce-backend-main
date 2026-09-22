@@ -42,9 +42,10 @@ export class OrdersRepository {
         subtotal, discount_amount, loyalty_redeemed_amount,
         delivery_fee, platform_fee, tax_amount, total_payable,
         payment_method, payment_status, coupon_code, delivery_address,
-        delivery_notes, estimated_delivery
+        delivery_notes, estimated_delivery,
+        wallet_amount, wallet_debited, client_order_ref
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21
       )
       RETURNING *`,
       [
@@ -54,6 +55,7 @@ export class OrdersRepository {
         data.totalPayable, data.paymentMethod, data.paymentStatus,
         data.couponCode || null, JSON.stringify(data.deliveryAddress),
         data.deliveryNotes || null, data.estimatedDelivery || null,
+        data.walletAmount || 0, !!data.walletDebited, data.clientOrderRef || null,
       ]
     )
 
@@ -81,6 +83,56 @@ export class OrdersRepository {
     return rows[0] ? this._formatCheckoutOrder(rows[0]) : null
   }
 
+  /** Every order created from a given checkout attempt's idempotency ref. */
+  async findByClientOrderRef(customerId, clientOrderRef) {
+    if (!clientOrderRef) return []
+    const { rows } = await query(
+      `SELECT * FROM orders WHERE customer_id = $1 AND client_order_ref = $2 ORDER BY created_at`,
+      [customerId, clientOrderRef]
+    )
+    return rows.map((row) => this._formatCheckoutOrder(row))
+  }
+
+  /**
+   * Atomically claim the pending wallet debit for an order — flips
+   * `wallet_debited` false→true and returns the amount to actually debit,
+   * or `null` if there's nothing pending (already claimed, or wallet was
+   * never toggled on for this order). Both `verifyPayment` and the
+   * Razorpay webhook can race to confirm the same payment; only whichever
+   * one wins this UPDATE actually touches the wallet.
+   */
+  async claimWalletDebit(orderId) {
+    const { rows } = await query(
+      `UPDATE orders SET wallet_debited = true, updated_at = NOW()
+       WHERE id = $1 AND wallet_debited = false AND wallet_amount > 0
+       RETURNING id, customer_id, wallet_amount, order_number`,
+      [orderId]
+    )
+    return rows[0] || null
+  }
+
+  /** Most recent order still in progress (not delivered/cancelled/returned). */
+  async getActiveOrder(customerId) {
+    const { rows } = await query(
+      `SELECT * FROM orders
+       WHERE customer_id = $1
+         AND status NOT IN ('CANCELLED', 'COMPLETED', 'DELIVERED', 'RETURNED')
+         AND payment_status != 'FAILED'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [customerId]
+    )
+    return rows[0] ? this._formatCheckoutOrder(rows[0]) : null
+  }
+
+  async getOrderItems(orderId) {
+    const { rows } = await query(
+      `SELECT * FROM order_items WHERE order_id = $1 ORDER BY created_at`,
+      [orderId]
+    )
+    return rows
+  }
+
   _formatCheckoutOrder(row) {
     return {
       id: row.id,
@@ -95,9 +147,12 @@ export class OrdersRepository {
       platformFee: Number(row.platform_fee || 0),
       taxAmount: Number(row.tax_amount || 0),
       totalAmount: Number(row.total_payable || 0),
+      walletAmountUsed: Number(row.wallet_amount || 0),
+      walletDebited: !!row.wallet_debited,
       paymentMethod: row.payment_method,
       paymentStatus: row.payment_status,
       couponCode: row.coupon_code || null,
+      clientOrderRef: row.client_order_ref || null,
       deliveryAddress: typeof row.delivery_address === 'string'
         ? JSON.parse(row.delivery_address)
         : row.delivery_address,

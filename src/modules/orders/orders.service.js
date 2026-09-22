@@ -12,6 +12,9 @@ import { CartRepository } from '../cart/cart.repository.js'
 import { CartService } from '../cart/cart.service.js'
 import { AddressesRepository } from '../addresses/addresses.repository.js'
 import { ShopProductsRepository } from '../shop-products/shop-products.repository.js'
+import { CouponsRepository } from '../coupons/coupons.repository.js'
+import { CouponsService } from '../coupons/coupons.service.js'
+import { WalletRepository } from '../wallet/wallet.repository.js'
 
 const ALLOWED_TRANSITIONS = {
   CART_CREATED: ['ORDER_PLACED', 'CANCELLED'],
@@ -50,6 +53,9 @@ export class OrdersService {
     this.cartService = deps?.cartService || new CartService(this.cartRepo)
     this.addressRepo = deps?.addressesRepository || new AddressesRepository()
     this.shopProductsRepo = deps?.shopProductsRepository || new ShopProductsRepository()
+    this.couponsRepo = deps?.couponsRepository || new CouponsRepository()
+    this.couponsService = deps?.couponsService || new CouponsService(this.couponsRepo)
+    this.walletRepo = deps?.walletRepository || new WalletRepository()
   }
 
   /**
@@ -60,6 +66,20 @@ export class OrdersService {
    */
   async placeOrder(customerId, payload) {
     const priceMode = payload.priceMode === 'wholesale' ? 'wholesale' : 'retail'
+
+    // Idempotency: a retried request for the same checkout attempt (a
+    // double-tap that slipped past the client's own isPlacingOrder guard,
+    // or a network retry of a response that never arrived) returns the
+    // order(s) already created instead of placing a duplicate order or
+    // debiting the wallet twice.
+    if (payload.clientOrderRef) {
+      const existing = await this.repository.findByClientOrderRef(customerId, payload.clientOrderRef)
+      if (existing.length > 0) {
+        logger.info({ customerId, clientOrderRef: payload.clientOrderRef }, 'placeOrder: idempotent replay, returning existing order(s)')
+        return { order: existing[0], orders: existing }
+      }
+    }
+
     const validation = await this.cartService.validateCart(customerId, priceMode)
     if (!validation.valid) {
       const err = new Error(validation.warnings?.[0] || 'Your cart cannot be checked out')
@@ -76,49 +96,152 @@ export class OrdersService {
       throw err
     }
 
+    const methodCheck = await this._checkPaymentMethodAllowed(customerId, payload.addressId, payload.paymentMethod)
+    if (methodCheck) {
+      const err = new Error(methodCheck.message)
+      err.statusCode = 400
+      err.code = methodCheck.code
+      throw err
+    }
+
     const groups = [...validation.groupedByShop.entries()]
+
+    // ── Coupon — validated once against the whole cart via the exact same
+    // CouponsService.validate() the mobile app's own "Apply Coupon" sheet
+    // already calls (same function, same inputs), so the discount charged
+    // here can never disagree with what was already shown/applied.
+    // Previously `couponCode` was only ever stored on the order — never
+    // actually validated or subtracted from the total.
+    let couponResult = null
+    const allCartItems = groups.flatMap(([, items]) => items)
+    const combinedSubtotal = Number(
+      allCartItems.reduce((sum, item) => sum + Number(item.lineTotal), 0).toFixed(2)
+    )
+    if (payload.couponCode) {
+      couponResult = await this.couponsService.validate(
+        customerId, payload.couponCode, combinedSubtotal, allCartItems
+      )
+      if (!couponResult.valid) {
+        const err = new Error(couponResult.message || 'This coupon could not be applied.')
+        err.statusCode = 400
+        err.code = couponResult.code || 'COUPON_INVALID'
+        throw err
+      }
+    }
+    const couponDiscount = couponResult?.discount || 0
+    const couponFreeDelivery = couponResult?.freeDelivery || false
+
+    // ── Wallet — read the real balance once. The actual debit below
+    // re-checks it atomically inside the transaction via the same
+    // `WHERE balance >= $1` guard WalletRepository.debit() always uses, so
+    // a balance that changes between this read and the debit can only ever
+    // make the debit fail safely, never overdraw.
+    let walletBalance = 0
+    if (payload.useWallet) {
+      const wallet = await this.walletRepo.getOrCreate(customerId)
+      walletBalance = Number(wallet?.balance || 0)
+    }
+
+    // Per-shop-group pricing. Delivery/platform fee stay the existing flat
+    // estimate (a separate, already-documented gap from TotalsEngine —
+    // out of scope here); coupon discount and the wallet slice are new.
+    const groupCharges = groups.map(([shopId, cartItems]) => {
+      const items = cartItems.map((line) => ({
+        productId: line.productId,
+        shopProductId: line.shopProductId,
+        name: line.name,
+        price: Number(line.effectivePrice),
+        quantity: Number(line.quantity),
+        unit: line.unit || null,
+        total: Number(line.lineTotal),
+        thumbnailUrl: line.thumbnailUrl || null,
+        pricingMode: priceMode,
+      }))
+      const subtotal = Number(items.reduce((sum, item) => sum + item.total, 0).toFixed(2))
+      const deliveryFee = couponFreeDelivery ? 0 : (subtotal >= 499 ? 0 : 25)
+      const platformFee = 5
+      return { shopId, items, subtotal, deliveryFee, platformFee }
+    })
+
+    const discountShares = this._splitProportional(couponDiscount, groupCharges.map((g) => g.subtotal))
+    groupCharges.forEach((g, i) => {
+      g.discount = discountShares[i]
+      g.payableBeforeWallet = Number((g.subtotal - g.discount + g.deliveryFee + g.platformFee).toFixed(2))
+    })
+
+    const combinedPayableBeforeWallet = Number(
+      groupCharges.reduce((sum, g) => sum + g.payableBeforeWallet, 0).toFixed(2)
+    )
+    // walletApplied = min(availableWalletBalance, currentPayableAmount) —
+    // never more than the customer actually has, never more than the bill.
+    const walletApplied = payload.useWallet ? Math.min(walletBalance, combinedPayableBeforeWallet) : 0
+    const walletShares = this._splitProportional(walletApplied, groupCharges.map((g) => g.payableBeforeWallet))
+    groupCharges.forEach((g, i) => {
+      g.walletAmount = walletShares[i]
+      g.totalPayable = Number((g.payableBeforeWallet - g.walletAmount).toFixed(2))
+    })
+
     const client = await getClient()
     const created = []
     try {
       await client.query('BEGIN')
-      for (const [shopId, cartItems] of groups) {
-        const items = cartItems.map((line) => ({
-            productId: line.productId,
-            shopProductId: line.shopProductId,
-            name: line.name,
-            price: Number(line.effectivePrice),
-            quantity: Number(line.quantity),
-            unit: line.unit || null,
-            total: Number(line.lineTotal),
-            thumbnailUrl: line.thumbnailUrl || null,
-            pricingMode: priceMode,
-          }))
+      for (const group of groupCharges) {
+        // Wallet fully covering the bill is the same "nothing left to
+        // collect" outcome whether the customer picked COD or ONLINE — no
+        // Razorpay order gets created for it either way (the mobile app's
+        // own `alreadyPaid` check already handles this: see
+        // checkout_provider.dart#placeOrder).
+        const walletCoversInFull = group.totalPayable <= 0 && group.walletAmount > 0
+        const debitNow = payload.paymentMethod === 'COD' || walletCoversInFull
 
-        const subtotal = Number(items.reduce((sum, item) => sum + item.total, 0).toFixed(2))
-        const deliveryFee = subtotal >= 499 ? 0 : 25
-        const platformFee = 5
-        const totalPayable = Number((subtotal + deliveryFee + platformFee).toFixed(2))
-        const orderNumber = await this.repository.generateCheckoutOrderNumber(client, shopId)
+        const orderNumber = await this.repository.generateCheckoutOrderNumber(client, group.shopId)
         const row = await this.repository.createCheckoutOrder(client, {
           orderNumber,
           customerId,
-          shopId,
+          shopId: group.shopId,
           status: 'ORDER_PLACED',
-          items,
-          subtotal,
-          deliveryFee,
-          platformFee,
-          totalPayable,
+          items: group.items,
+          subtotal: group.subtotal,
+          discountAmount: group.discount,
+          deliveryFee: group.deliveryFee,
+          platformFee: group.platformFee,
+          totalPayable: group.totalPayable,
           paymentMethod: payload.paymentMethod,
-          paymentStatus: payload.paymentMethod === 'COD' ? 'PENDING' : 'PENDING',
+          paymentStatus: walletCoversInFull ? 'PAID' : 'PENDING',
           couponCode: payload.couponCode,
           deliveryAddress: address,
           deliveryNotes: payload.deliveryNotes,
           estimatedDelivery: payload.deliveryMode === 'SCHEDULED'
             ? payload.scheduledDeliveryAt || null
             : null,
+          walletAmount: group.walletAmount,
+          // COD debits immediately below, atomic with this same order row.
+          // A partial wallet + ONLINE order defers the debit to payment
+          // confirmation instead (payments.service.js#verifyPayment / the
+          // Razorpay webhook) — so a cancelled/failed Razorpay attempt
+          // never had anything taken from the wallet to roll back.
+          walletDebited: debitNow,
+          clientOrderRef: payload.clientOrderRef || null,
         })
-        for (const item of items) {
+
+        if (group.walletAmount > 0 && debitNow) {
+          const wallet = await this.walletRepo.getForUpdate(client, customerId)
+          if (!wallet || Number(wallet.balance) < group.walletAmount) {
+            // Balance changed since the read above (spent concurrently on
+            // another device) — fail the whole order rather than silently
+            // charging less wallet than the bill already promised.
+            const err = new Error('Your wallet balance changed just now — please try again.')
+            err.statusCode = 409
+            err.code = 'WALLET_BALANCE_CHANGED'
+            throw err
+          }
+          await this.walletRepo.debit(
+            client, wallet.id, group.walletAmount,
+            `Payment for order ${orderNumber}`, row.id, { orderId: row.id }
+          )
+        }
+
+        for (const item of group.items) {
           await this.shopProductsRepo.applyStockChange(client, {
             shopProductId: item.shopProductId,
             delta: -item.quantity,
@@ -141,14 +264,132 @@ export class OrdersService {
       client.release()
     }
 
-    // COD is confirmed as an order immediately.  Online carts remain until
-    // Razorpay verification succeeds, so a cancelled payment is retryable.
-    if (payload.paymentMethod === 'COD') {
+    // COD is confirmed (and, same as before, paid-in-full-by-wallet orders
+    // of either method) clears the cart immediately. A genuinely
+    // outstanding ONLINE balance keeps the cart until Razorpay verification
+    // succeeds, so a cancelled payment is retryable.
+    const anyWalletCoveredInFull = created.some((order) => order.paymentStatus === 'PAID')
+    if (payload.paymentMethod === 'COD' || anyWalletCoveredInFull) {
       await this.cartRepo.clearCart(customerId, priceMode)
       await this.cartRepo.clearExtras(customerId, priceMode)
+
+      // Coupon usage is recorded now — the order is already confirmed paid
+      // (or COD, collected on delivery). An ONLINE order with money still
+      // outstanding records usage at payment confirmation instead, exactly
+      // as it always has (payments.service.js#verifyPayment / the webhook).
+      if (payload.couponCode && couponResult?.valid) {
+        for (const order of created) {
+          try {
+            await this.couponsService.recordUsageForOrder(order.id)
+          } catch (err) {
+            logger.warn({ err: err.message, orderId: order.id }, 'Coupon usage recording failed at placement (non-critical)')
+          }
+        }
+      }
     }
+
     logger.info({ customerId, orderIds: created.map((order) => order.id) }, 'Mobile checkout completed')
     return { order: created[0], orders: created }
+  }
+
+  /** Splits `amount` across `weights`' proportional shares in paise, summing back to exactly `amount` (largest-remainder method). */
+  _splitProportional(amount, weights) {
+    const total = weights.reduce((sum, w) => sum + w, 0)
+    if (amount <= 0 || total <= 0) {
+      return weights.map(() => 0)
+    }
+    const totalCents = Math.round(amount * 100)
+    const idealCents = weights.map((w) => (w / total) * totalCents)
+    const flooredCents = idealCents.map((c) => Math.floor(c))
+    const remainders = idealCents.map((c, i) => c - flooredCents[i])
+    const distributed = flooredCents.reduce((sum, c) => sum + c, 0)
+    const residue = totalCents - distributed
+    const order = remainders.map((r, i) => ({ r, i })).sort((a, b) => b.r - a.r)
+    for (let k = 0; k < residue; k++) {
+      flooredCents[order[k % order.length].i] += 1
+    }
+    return flooredCents.map((c) => Number((c / 100).toFixed(2)))
+  }
+
+  /** Most recent order still in progress — powers the mobile "track your order" banner. */
+  async getActiveOrder(customerId) {
+    return this.repository.getActiveOrder(customerId)
+  }
+
+  /**
+   * Customer-initiated cancel — used by the mobile app when its own
+   * Razorpay checkout fails or is dismissed by the user before payment
+   * ever completed. Refuses to touch an order the backend already has
+   * marked PAID (a captured payment must never be silently orphaned) —
+   * the mobile app's cancel/reorder helpers already know to treat that
+   * exact `{paymentConfirmed:true}` shape as "actually succeeded, go to
+   * the success screen" instead of a failure (see
+   * checkout_provider.dart#_tryCancelOrder).
+   */
+  async cancelOrder(customerId, orderId, reason) {
+    const order = await this.repository.findByIdAndUser(orderId, customerId)
+    if (!order) {
+      const err = new Error('Order not found')
+      err.statusCode = 404
+      err.code = 'ORDER_NOT_FOUND'
+      throw err
+    }
+
+    if (order.paymentStatus === 'PAID') {
+      return { alreadyCancelled: false, paymentConfirmed: true, order }
+    }
+
+    if (order.status === 'CANCELLED') {
+      // Idempotent — a duplicate cancel call (double tap, retry) is a
+      // harmless no-op rather than an error.
+      return { alreadyCancelled: true, paymentConfirmed: false, order }
+    }
+
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      await client.query(
+        `UPDATE orders SET status = 'CANCELLED', payment_status = 'FAILED', updated_at = NOW() WHERE id = $1`,
+        [orderId]
+      )
+      const items = await this.repository.getOrderItems(orderId)
+      await this.shopProductsRepo.restoreStockForCancelledOrder(client, {
+        orderId,
+        items,
+        source: 'API',
+        actor: { userId: customerId },
+      })
+      await client.query('COMMIT')
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
+
+    await this.repository.logStatusTransition(orderId, order.status, 'CANCELLED', customerId, reason || 'Cancelled by customer')
+    logger.info({ customerId, orderId, reason }, 'Order cancelled by customer')
+
+    const updated = await this.repository.findByIdAndUser(orderId, customerId)
+    return { alreadyCancelled: false, paymentConfirmed: false, order: updated }
+  }
+
+  /**
+   * Called by the mobile app right after a successful cancel, as a
+   * best-effort follow-up (see checkout_provider.dart#_tryCancelOrder /
+   * payment_provider.dart#_cancelPendingOrder) — stock restoration for a
+   * cancelled order already happens inside `cancelOrder` itself, so this
+   * is intentionally a safe no-op rather than a second restock.
+   */
+  async reorder(customerId, orderId) {
+    const order = await this.repository.findByIdAndUser(orderId, customerId)
+    if (!order) {
+      const err = new Error('Order not found')
+      err.statusCode = 404
+      err.code = 'ORDER_NOT_FOUND'
+      throw err
+    }
+    return { orderId, status: order.status }
   }
 
   async _checkStoreOpenForAsap() {

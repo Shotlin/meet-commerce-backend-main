@@ -3,6 +3,7 @@ import { logger } from '../../config/logger.js'
 import { env } from '../../config/env.js'
 import { razorpay } from '../../config/razorpay.js'
 import { orderQueue } from '../../config/bullmq.js'
+import { getClient } from '../../config/database.js'
 import { getOffsetLimit, buildPagination } from '../../utils/paginate.js'
 import { OrdersRepository } from '../orders/orders.repository.js'
 import { PaymentSettingsService } from '../payment-settings/payment-settings.service.js'
@@ -24,7 +25,51 @@ export class PaymentsService {
     this.ordersRepo = new OrdersRepository()
     this.paymentSettingsService = new PaymentSettingsService()
     this.cashbackService = new CashbackService()
-    this.walletService = new WalletService(new WalletRepository())
+    this.walletRepo = new WalletRepository()
+    this.walletService = new WalletService(this.walletRepo)
+  }
+
+  /**
+   * A partial wallet + ONLINE order never debits the wallet at order-
+   * creation time (see orders.service.js#placeOrder's doc comment) — it
+   * stays a pending `wallet_amount` on the order row until payment is
+   * actually confirmed, right here. `claimWalletDebit` is the atomic
+   * false→true claim on `wallet_debited`, so whichever of verifyPayment()
+   * or the Razorpay webhook gets here first is the only one that ever
+   * touches the wallet — the loser sees nothing to claim and returns.
+   */
+  async _settleWalletIfPending(orderId) {
+    const claim = await this.ordersRepo.claimWalletDebit(orderId)
+    if (!claim) return
+
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const wallet = await this.walletRepo.getForUpdate(client, claim.customer_id)
+      if (!wallet || Number(wallet.balance) < Number(claim.wallet_amount)) {
+        // Shouldn't normally happen (the balance was already checked at
+        // order-creation time) — but a payment confirmation must never
+        // crash on a wallet shortfall. wallet_debited is already claimed
+        // above, so this never retries; log it for manual reconciliation.
+        await client.query('ROLLBACK')
+        logger.error(
+          { orderId, walletAmount: claim.wallet_amount },
+          'Deferred wallet debit skipped — insufficient balance at payment confirmation'
+        )
+        return
+      }
+      await this.walletRepo.debit(
+        client, wallet.id, Number(claim.wallet_amount),
+        `Payment for order ${claim.order_number}`, orderId, { orderId }
+      )
+      await client.query('COMMIT')
+      logger.info({ orderId, amount: claim.wallet_amount }, 'Deferred wallet debit settled after payment confirmation')
+    } catch (err) {
+      await client.query('ROLLBACK')
+      logger.error({ err, orderId }, 'Deferred wallet debit failed')
+    } finally {
+      client.release()
+    }
   }
 
   /**
@@ -167,6 +212,7 @@ export class PaymentsService {
     await this.ordersRepo.updateStatus(payment.orderId, 'CONFIRMED', {
       paymentStatus: 'PAID',
     })
+    await this._settleWalletIfPending(payment.orderId)
     await this._queueAutoAssign(payment.orderId, 'PAYMENT_VERIFY')
 
     // Credit any cashback whose trigger is PAYMENT_SUCCESS or
@@ -281,6 +327,7 @@ export class PaymentsService {
             await this.ordersRepo.updateStatus(payment.orderId, 'CONFIRMED', {
               paymentStatus: 'PAID',
             })
+            await this._settleWalletIfPending(payment.orderId)
             await this._queueAutoAssign(payment.orderId, 'PAYMENT_WEBHOOK')
             this.cashbackService.evaluateAndCredit(payment.orderId, 'PAYMENT_SUCCESS').catch((err) => {
               logger.warn({ err: err.message, orderId: payment.orderId }, 'Cashback evaluation failed (webhook)')
