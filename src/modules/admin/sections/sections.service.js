@@ -180,7 +180,10 @@ export class SectionsService {
   }
 }
 
-function mergeSectionConfig(currentValue, nextValue) {
+// Section config is a JSONB contract shared by the builder and Flutter.
+// Keeping this merge deep means an update to `section_header` remains scoped
+// to this manifest row and cannot erase that row's product/category settings.
+export function mergeSectionConfig(currentValue, nextValue) {
   if (Array.isArray(nextValue)) {
     return nextValue
   }
