@@ -128,6 +128,7 @@ export const createCouponSchema = {
     properties: {
       code:                  { type: 'string', minLength: 2, maxLength: 50 },
       description:           { type: 'string', maxLength: 500 },
+      terms:                 { type: 'string', maxLength: 2000 },
       discountType:          { type: 'string', enum: ['PERCENTAGE', 'FLAT', 'CASHBACK', 'FREE_DELIVERY'] },
       discountValue:         { type: 'number', minimum: 0 },
       minOrderAmount:        { type: 'number', minimum: 0, default: 0 },
@@ -167,6 +168,7 @@ export const updateCouponSchema = {
     properties: {
       code:                  { type: 'string', minLength: 2, maxLength: 50 },
       description:           { type: 'string', maxLength: 500 },
+      terms:                 { type: 'string', maxLength: 2000 },
       discountType:          { type: 'string', enum: ['PERCENTAGE', 'FLAT', 'CASHBACK', 'FREE_DELIVERY'] },
       discountValue:         { type: 'number', minimum: 0 },
       minOrderAmount:        { type: 'number', minimum: 0 },

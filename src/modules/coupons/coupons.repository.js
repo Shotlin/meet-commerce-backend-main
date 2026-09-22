@@ -14,7 +14,7 @@ import { query } from '../../config/database.js'
  * migrated to the multi-vendor application algorithm in task 9.2.
  */
 const COUPON_COLUMNS = `
-  id, code, description,
+  id, code, description, terms,
   discount_type, discount_value,
   min_order_amount, max_discount,
   usage_limit, used_count, per_user_limit,
@@ -237,7 +237,7 @@ export class CouponsRepository {
 
     const { rows } = await query(
       `INSERT INTO coupons (
-         code, description,
+         code, description, terms,
          discount_type, discount_value,
          min_order_amount, max_discount,
          usage_limit, per_user_limit,
@@ -251,23 +251,24 @@ export class CouponsRepository {
          created_by
        )
        VALUES (
-         UPPER($1), $2,
-         $3, $4,
-         $5, $6,
-         $7, $8,
-         $9, $10,
-         $11, $12, $13,
-         $14, $15, $16,
-         $17, $18,
-         $19, $20,
-         $21,
+         UPPER($1), $2, $3,
+         $4, $5,
+         $6, $7,
+         $8, $9,
+         $10, $11,
+         $12, $13, $14,
+         $15, $16, $17,
+         $18, $19,
+         $20, $21,
          $22,
-         $23
+         $23,
+         $24
        )
        RETURNING ${COUPON_COLUMNS}`,
       [
         data.code,
         data.description ?? null,
+        data.terms ?? null,
         data.discountType,
         data.discountValue,
         data.minOrderAmount ?? 0,
@@ -309,6 +310,7 @@ export class CouponsRepository {
     const fieldMap = {
       code:                  'code',
       description:           'description',
+      terms:                 'terms',
       discountType:          'discount_type',
       discountValue:         'discount_value',
       minOrderAmount:        'min_order_amount',
@@ -455,6 +457,7 @@ export class CouponsRepository {
       id:                    row.id,
       code:                  row.code,
       description:           row.description,
+      terms:                 row.terms,
       discountType:          row.discount_type,
       discountValue:         parseFloat(row.discount_value),
       minOrderAmount:        parseFloat(row.min_order_amount),
