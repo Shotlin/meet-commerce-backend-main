@@ -375,11 +375,37 @@ export class OrdersService {
   }
 
   /**
-   * Called by the mobile app right after a successful cancel, as a
-   * best-effort follow-up (see checkout_provider.dart#_tryCancelOrder /
-   * payment_provider.dart#_cancelPendingOrder) — stock restoration for a
-   * cancelled order already happens inside `cancelOrder` itself, so this
-   * is intentionally a safe no-op rather than a second restock.
+   * Re-adds every item from a past order back into the customer's live
+   * cart. Two call patterns hit this same endpoint: the explicit "Reorder"
+   * / "Buy Again" button (orders_screen.dart, order_detail_screen.dart —
+   * via `ReorderUseCase`, which reads `itemCount`/`warnings` from the
+   * response and navigates to the cart) and a best-effort follow-up after
+   * a failed/cancelled online payment (checkout_provider.dart
+   * #_tryCancelOrder, payment_provider.dart#_cancelPendingOrder) meant to
+   * restore the customer's cart contents so a failed payment doesn't also
+   * cost them their selection.
+   *
+   * Previously this was a hard no-op — `return { orderId, status }` — with
+   * a comment rationalizing it as deliberate ("stock restoration already
+   * happens inside cancelOrder, so this is a safe no-op rather than a
+   * second restock"). That reasoning only ever covered why it shouldn't
+   * touch stock; it never actually added anything to the cart either, so
+   * both the "Buy Again" button and the post-cancel cart-restore did
+   * nothing at all — a tap on "Buy Again" always showed the mobile
+   * client's canned "Items added to cart" success toast while the cart
+   * stayed exactly as it was. Stock is untouched here on purpose — adding
+   * to the cart doesn't decrement it (only `placeOrder` does); that part
+   * of the reasoning was correct even though the conclusion it was
+   * attached to (return nothing) wasn't.
+   *
+   * `order.items` is the JSONB snapshot already written onto the order row
+   * at checkout (`createCheckoutOrder`, `data.items`), so no join is
+   * needed. Each item is added independently through the same
+   * `CartService.addItem` a live `/cart/items` call uses — a product that's
+   * gone out of stock or been deleted since is reported as a per-item
+   * warning instead of failing the whole reorder. Price mode defaults to
+   * 'retail': the order row doesn't persist which mode it was placed
+   * under.
    */
   async reorder(customerId, orderId) {
     const order = await this.repository.findByIdAndUser(orderId, customerId)
@@ -389,7 +415,29 @@ export class OrdersService {
       err.code = 'ORDER_NOT_FOUND'
       throw err
     }
-    return { orderId, status: order.status }
+
+    const items = Array.isArray(order.items) ? order.items : []
+    const warnings = []
+    let itemCount = 0
+
+    for (const item of items) {
+      const productId = item?.productId
+      const quantity = Number(item?.quantity) || 1
+      if (!productId) continue
+
+      const result = await this.cartService.addItem(customerId, {
+        productId,
+        quantity,
+        priceMode: 'retail',
+      })
+      if (result?.success === false) {
+        warnings.push(`${item?.name || 'An item'}: ${result.message || 'could not be added'}`)
+      } else {
+        itemCount += 1
+      }
+    }
+
+    return { orderId, status: order.status, itemCount, warnings }
   }
 
   async _checkStoreOpenForAsap() {

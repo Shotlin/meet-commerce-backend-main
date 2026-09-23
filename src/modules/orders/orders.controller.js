@@ -90,7 +90,12 @@ export class OrdersController {
     const customerId = req.userId || req.user.id
     const { orderId } = req.params
     const result = await this.service.reorder(customerId, orderId)
-    return reply.status(200).send({ success: true, data: result })
+    // The mobile client (order_remote_datasource.dart#reorder) reads
+    // `itemCount` from `data` but `warnings` as a top-level sibling of
+    // `data` — matches that existing contract rather than nesting both
+    // under `data`, since the client is already shipped expecting this.
+    const { warnings, ...data } = result
+    return reply.status(200).send({ success: true, data, warnings })
   }
 
   getInvoice = async (req, reply) => {
