@@ -10,10 +10,21 @@ export const listOrdersSchema = {
       limit: { type: 'integer', default: 20, maximum: 100 },
       status: { type: 'string' },
       paymentMethod: { type: 'string' },
+      paymentStatus: { type: 'string' },
       search: { type: 'string' },
       startDate: { type: 'string', format: 'date-time' },
       endDate: { type: 'string', format: 'date-time' },
       deliveryType: { type: 'string', enum: ['express', 'scheduled', 'standard'] },
+      riderId: { type: 'string', format: 'uuid' },
+      minAmount: { type: 'number', minimum: 0 },
+      maxAmount: { type: 'number', minimum: 0 },
+      // Money-safety filters — see §"payment reconciliation hardening".
+      // needsPaymentReview: a Razorpay capture landed after the order had
+      // already moved on (cancelled/stock restored) and needs a human
+      // decision. recoveredFromFailed: a payment this app once showed
+      // FAILED that Razorpay later proved was actually captured all along.
+      needsPaymentReview: { type: 'boolean' },
+      recoveredFromFailed: { type: 'boolean' },
     },
   },
 }
@@ -179,6 +190,30 @@ export const cancelOrderSchema = {
       refundTo: { type: 'string', enum: ['wallet', 'original', 'none'], default: 'wallet' },
     },
   },
+}
+
+export const reconcilePaymentSchema = {
+  tags: ['Admin Orders'],
+  summary: 'Re-check this order\'s payment against Razorpay directly (server-to-server)',
+  params: uuidParam,
+}
+
+export const bulkReconcilePaymentsSchema = {
+  tags: ['Admin Orders'],
+  summary: 'Re-check payment status for multiple orders against Razorpay',
+  body: {
+    type: 'object',
+    required: ['orderIds'],
+    properties: {
+      orderIds: { type: 'array', items: { type: 'string', format: 'uuid' }, minItems: 1, maxItems: 50 },
+    },
+  },
+}
+
+export const razorpayDetailsSchema = {
+  tags: ['Admin Orders'],
+  summary: 'Live Razorpay payment detail for this order — fetched server-side, never exposes credentials',
+  params: uuidParam,
 }
 
 export const bulkStatusSchema = {

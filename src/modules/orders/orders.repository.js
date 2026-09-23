@@ -232,7 +232,24 @@ export class OrdersRepository {
     return this.findOrderById(orderId)
   }
 
-  async updateStatus(orderId, status, options = {}) {
+  /**
+   * Row-locked read for the payment-finalization transaction
+   * (`PaymentsService#completeVerifiedPayment`) — it needs to know the
+   * order's CURRENT status, inside the same transaction as the payment
+   * update, to decide whether the order is still confirmable (`PENDING`)
+   * or has already moved on (e.g. cancelled — see `needs_manual_review`).
+   */
+  async findByIdForUpdate(client, orderId) {
+    const { rows } = await client.query(
+      `SELECT * FROM orders WHERE id = $1 FOR UPDATE`,
+      [orderId]
+    )
+    return rows[0] || null
+  }
+
+  /** `client` runs this inside the caller's own transaction; omit it to use the pool directly. */
+  async updateStatus(orderId, status, options = {}, client = null) {
+    const runner = client || { query: (text, params) => query(text, params) }
     const setClauses = []
     const params = []
 
@@ -256,7 +273,7 @@ export class OrdersRepository {
     }
 
     params.push(orderId)
-    const { rows } = await query(
+    const { rows } = await runner.query(
       `UPDATE orders SET ${setClauses.join(', ')} WHERE id = $${params.length} RETURNING *`,
       params
     )

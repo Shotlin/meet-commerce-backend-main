@@ -16,6 +16,17 @@ const INLINE_AUTO_ASSIGN_IN_NON_PROD =
   process.env.NODE_ENV !== 'production'
 
 const ALLOWED_TRANSITIONS = {
+  // 'ORDER_PLACED' is the REAL status a live mobile order actually has
+  // immediately after checkout (orders.service.js#placeOrder writes this,
+  // not 'PENDING' — see that module's own status vocabulary, distinct
+  // from this one). Before this fix, every freshly-placed order an admin
+  // looked at was unconditionally rejected by `updateStatus`/`cancelOrder`
+  // ("Cannot transition from ORDER_PLACED to X") because this map had no
+  // entry for it at all — the exact same disease already documented for
+  // `shop-orders/service.js`'s own ALLOWED_TRANSITIONS. 'PENDING' is kept
+  // too since some order-creation paths (e.g. createManualOrder) or older
+  // rows may still use it.
+  ORDER_PLACED: ['CONFIRMED', 'CANCELLED'],
   PENDING: ['CONFIRMED', 'CANCELLED'],
   CONFIRMED: ['PREPARING', 'CANCELLED'],
   PREPARING: ['PACKED', 'CANCELLED'],
@@ -122,7 +133,26 @@ export class AdminOrdersService {
     return this.repository.getStatsByStatus()
   }
 
-  async findById(orderId) {
+  /**
+   * Fetch an order and, when the caller is scoped to a specific shop
+   * (`requestShopId` — resolved by `requireShopScope()`: a shop-staff
+   * JWT's own shop, or an HQ user's optional X-Shop-Id header), refuse
+   * access if the order belongs to a different shop. `requestShopId` of
+   * `null`/`undefined` means "All Shops" (an HQ user with nothing
+   * selected) and is never restricted. Every method below that mutates or
+   * reads a single order by id calls this right after its own
+   * `repository.findById` so a shop-scoped admin can never view or act on
+   * another shop's order just by knowing its UUID — never trust a
+   * frontend-selected shop id by itself, only what `requireShopScope()`
+   * already verified onto the request.
+   */
+  _assertShopAccess(order, requestShopId) {
+    if (requestShopId && order.shop_id && order.shop_id !== requestShopId) {
+      throw { statusCode: 403, message: 'This order belongs to a different shop', code: 'CROSS_SHOP_ACCESS_DENIED' }
+    }
+  }
+
+  async findById(orderId, requestShopId = null) {
     const [order, items, timeline, payment, delivery] = await Promise.all([
       this.repository.findById(orderId),
       this.repository.getOrderItems(orderId),
@@ -131,18 +161,21 @@ export class AdminOrdersService {
       this.repository.getOrderDelivery(orderId),
     ])
     if (!order) throw { statusCode: 404, message: 'Order not found' }
+    this._assertShopAccess(order, requestShopId)
     return { ...order, items, timeline, payment, delivery }
   }
 
-  async getOrderNotes(orderId) {
+  async getOrderNotes(orderId, requestShopId = null) {
     const order = await this.repository.findById(orderId)
     if (!order) throw { statusCode: 404, message: 'Order not found' }
+    this._assertShopAccess(order, requestShopId)
     return this.repository.getOrderNotes(orderId)
   }
 
-  async addOrderNote(orderId, authorId, body, ip) {
+  async addOrderNote(orderId, authorId, body, ip, requestShopId = null) {
     const order = await this.repository.findById(orderId)
     if (!order) throw { statusCode: 404, message: 'Order not found' }
+    this._assertShopAccess(order, requestShopId)
 
     const note = await this.repository.addOrderNote(orderId, authorId, body)
 
@@ -152,9 +185,10 @@ export class AdminOrdersService {
     return note
   }
 
-  async updateStatus(orderId, newStatus, adminId, note, ip) {
+  async updateStatus(orderId, newStatus, adminId, note, ip, requestShopId = null) {
     const order = await this.repository.findById(orderId)
     if (!order) throw { statusCode: 404, message: 'Order not found' }
+    this._assertShopAccess(order, requestShopId)
 
     const allowed = ALLOWED_TRANSITIONS[order.status]
     if (!allowed || !allowed.includes(newStatus)) {
@@ -194,9 +228,10 @@ export class AdminOrdersService {
    * blocked once the order has reached a state where delivery timing is
    * no longer meaningful to change.
    */
-  async rescheduleDelivery(orderId, { scheduledSlotStart, scheduledSlotEnd, scheduledSlotLabel, reason }, adminId, ip) {
+  async rescheduleDelivery(orderId, { scheduledSlotStart, scheduledSlotEnd, scheduledSlotLabel, reason }, adminId, ip, requestShopId = null) {
     const order = await this.repository.findById(orderId)
     if (!order) throw { statusCode: 404, message: 'Order not found' }
+    this._assertShopAccess(order, requestShopId)
 
     const TERMINAL_STATUSES = new Set(['OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED', 'REFUNDED'])
     if (TERMINAL_STATUSES.has(order.status)) {
@@ -241,9 +276,10 @@ export class AdminOrdersService {
     return updated
   }
 
-  async assignRider(orderId, riderId, adminId, ip) {
+  async assignRider(orderId, riderId, adminId, ip, requestShopId = null) {
     const order = await this.repository.findById(orderId)
     if (!order) throw { statusCode: 404, message: 'Order not found' }
+    this._assertShopAccess(order, requestShopId)
 
     const assignment = await this.repository.assignRider(orderId, riderId)
 
@@ -259,8 +295,20 @@ export class AdminOrdersService {
     return { orderId, riderId }
   }
 
-  async bulkAssign(assignments, adminId, ip) {
+  async bulkAssign(assignments, adminId, ip, requestShopId = null) {
     if (assignments.length > 50) throw { statusCode: 400, message: 'Max 50 assignments at once' }
+
+    if (requestShopId) {
+      // The bulk repository method has no per-row shop check of its own —
+      // verify every order in this batch belongs to the caller's shop
+      // BEFORE any of them run, so a shop-scoped request can't slip a
+      // foreign order's id into an otherwise-legitimate batch.
+      for (const { orderId } of assignments) {
+        const order = await this.repository.findById(orderId)
+        if (order) this._assertShopAccess(order, requestShopId)
+      }
+    }
+
     const results = await this.repository.bulkAssign(assignments)
     logAdminActivity(adminId, `Bulk assigned ${assignments.length} orders`, 'order', null, null,
       { count: assignments.length }, ip)
@@ -290,13 +338,13 @@ export class AdminOrdersService {
     return order
   }
 
-  async getInvoice(orderId) {
-    const order = await this.findById(orderId)
+  async getInvoice(orderId, requestShopId = null) {
+    const order = await this.findById(orderId, requestShopId)
     return generateInvoicePDF(order)
   }
 
-  async getPackingSlip(orderId) {
-    const order = await this.findById(orderId)
+  async getPackingSlip(orderId, requestShopId = null) {
+    const order = await this.findById(orderId, requestShopId)
     return generatePackingSlipPDF(order)
   }
 
@@ -332,9 +380,10 @@ export class AdminOrdersService {
    * that was never paid (e.g. a COD order cancelled before delivery) has
    * nothing to refund and is rejected outright.
    */
-  async refundOrder(orderId, { reason, refundTo = 'wallet' }, adminId, ip) {
+  async refundOrder(orderId, { reason, refundTo = 'wallet' }, adminId, ip, requestShopId = null) {
     const order = await this.repository.findById(orderId)
     if (!order) throw { statusCode: 404, message: 'Order not found' }
+    this._assertShopAccess(order, requestShopId)
 
     // Only delivered or cancelled orders can be refunded
     if (!['DELIVERED', 'CANCELLED'].includes(order.status)) {
@@ -426,10 +475,11 @@ export class AdminOrdersService {
     return { orderId, refundAmount, refundTo, status: 'REFUNDED' }
   }
 
-  async cancelOrder(orderId, body, adminId, ip) {
+  async cancelOrder(orderId, body, adminId, ip, requestShopId = null) {
     const { reason, refundTo } = body || {}
     const order = await this.repository.findById(orderId)
     if (!order) throw { statusCode: 404, message: 'Order not found' }
+    this._assertShopAccess(order, requestShopId)
 
     // Treat null status as PENDING
     const currentStatus = order.status || 'PENDING'
@@ -533,11 +583,131 @@ export class AdminOrdersService {
     }
   }
 
-  async bulkUpdateStatus(orderIds, newStatus, adminId, ip) {
+  /**
+   * "Re-check with Razorpay" — a live, server-to-server reconciliation for
+   * one order's payment. Routes through `PaymentsService#reconcileWithRazorpay`
+   * (the same shared helper the payment-expiry worker uses), which itself
+   * routes any captured payment it finds through the one centralized
+   * `completeVerifiedPayment` finalizer — so an admin re-check can never
+   * apply a different confirmation cascade than any other path.
+   */
+  async reconcilePayment(orderId, requestShopId = null) {
+    const order = await this.repository.findById(orderId)
+    if (!order) throw { statusCode: 404, message: 'Order not found' }
+    this._assertShopAccess(order, requestShopId)
+
+    const payment = await this.repository.getOrderPayment(orderId)
+    if (!payment || !payment.razorpay_order_id) {
+      return { orderId, captured: false, message: 'No online payment on this order to reconcile' }
+    }
+
+    const { PaymentsService } = await import('../../payments/payments.service.js')
+    const { PaymentsRepository } = await import('../../payments/payments.repository.js')
+    const result = await new PaymentsService(new PaymentsRepository(), this.fastify)
+      .reconcileWithRazorpay(payment.razorpay_order_id, 'ADMIN_MANUAL_RECONCILE')
+
+    return {
+      orderId,
+      captured: result.captured,
+      needsManualReview: !!result.needsManualReview,
+      skipped: !!result.skipped,
+      message: result.captured
+        ? (result.needsManualReview
+          ? 'Razorpay confirms this was captured, but the order already moved on — flagged for manual review'
+          : 'Razorpay confirmed a captured payment — order finalized')
+        : 'Razorpay shows no captured payment for this order',
+    }
+  }
+
+  /**
+   * Same as `reconcilePayment`, batched — a historical audit tool for
+   * sweeping a set of PENDING/FAILED/needs-review orders at once. Capped
+   * at 50 per call (mirrors `bulkAssign`'s own cap) and never throws for
+   * an individual order's failure — each result is reported independently
+   * so one bad order id can't abort the whole batch.
+   */
+  async bulkReconcilePayments(orderIds, requestShopId = null) {
+    if (orderIds.length > 50) throw { statusCode: 400, message: 'Max 50 orders at once' }
+
     const results = []
     for (const orderId of orderIds) {
       try {
-        const res = await this.updateStatus(orderId, newStatus, adminId, null, ip)
+        const result = await this.reconcilePayment(orderId, requestShopId)
+        results.push(result)
+      } catch (err) {
+        results.push({ orderId, captured: false, error: err.message || 'Failed' })
+      }
+    }
+    return results
+  }
+
+  /**
+   * Live Razorpay payment detail — fetched server-side with our Razorpay
+   * secret via `razorpay.payments.fetch`, never exposed to the browser.
+   * Only the fields the dashboard actually needs are returned; nothing
+   * here is mirrored/cached locally, so it always reflects Razorpay's
+   * current record.
+   */
+  async getRazorpayDetails(orderId, requestShopId = null) {
+    const order = await this.repository.findById(orderId)
+    if (!order) throw { statusCode: 404, message: 'Order not found' }
+    this._assertShopAccess(order, requestShopId)
+
+    const payment = await this.repository.getOrderPayment(orderId)
+    if (!payment || !payment.razorpay_payment_id) {
+      throw { statusCode: 404, message: 'No Razorpay payment on this order' }
+    }
+
+    const { razorpay } = await import('../../../config/razorpay.js')
+    if (!razorpay) throw { statusCode: 400, message: 'Razorpay is not configured' }
+
+    let rzpPayment
+    try {
+      rzpPayment = await razorpay.payments.fetch(payment.razorpay_payment_id)
+    } catch (err) {
+      logger.error({ err: err.error || err.message, orderId }, 'Live Razorpay payment fetch failed')
+      throw { statusCode: 502, message: 'Unable to reach Razorpay right now' }
+    }
+
+    return {
+      id: rzpPayment.id,
+      status: rzpPayment.status,
+      method: rzpPayment.method,
+      amount: rzpPayment.amount != null ? rzpPayment.amount / 100 : null,
+      amountRefunded: rzpPayment.amount_refunded != null ? rzpPayment.amount_refunded / 100 : null,
+      refundStatus: rzpPayment.refund_status || null,
+      currency: rzpPayment.currency,
+      fee: rzpPayment.fee != null ? rzpPayment.fee / 100 : null,
+      tax: rzpPayment.tax != null ? rzpPayment.tax / 100 : null,
+      international: !!rzpPayment.international,
+      email: rzpPayment.email || null,
+      contact: rzpPayment.contact || null,
+      vpa: rzpPayment.vpa || null,
+      bank: rzpPayment.bank || null,
+      wallet: rzpPayment.wallet || null,
+      card: rzpPayment.card
+        ? {
+          last4: rzpPayment.card.last4 || null,
+          network: rzpPayment.card.network || null,
+          type: rzpPayment.card.type || null,
+          issuer: rzpPayment.card.issuer || null,
+        }
+        : null,
+      acquirerReference: rzpPayment.acquirer_data?.rrn || rzpPayment.acquirer_data?.arn || null,
+      upiTransactionId: rzpPayment.acquirer_data?.upi_transaction_id || null,
+      createdAt: rzpPayment.created_at ? new Date(rzpPayment.created_at * 1000).toISOString() : null,
+      errorCode: rzpPayment.error_code || null,
+      errorDescription: rzpPayment.error_description || null,
+      errorReason: rzpPayment.error_reason || null,
+      notes: rzpPayment.notes || null,
+    }
+  }
+
+  async bulkUpdateStatus(orderIds, newStatus, adminId, ip, requestShopId = null) {
+    const results = []
+    for (const orderId of orderIds) {
+      try {
+        const res = await this.updateStatus(orderId, newStatus, adminId, null, ip, requestShopId)
         results.push({ orderId, ...res, success: true })
       } catch (err) {
         results.push({ orderId, success: false, message: err.message || 'Failed' })

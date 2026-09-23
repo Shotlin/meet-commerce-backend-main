@@ -38,6 +38,21 @@ export const buildApp = async () => {
   await app.register(import("./plugins/errorHandler.plugin.js"));
   await app.register(import("./plugins/cors.plugin.js"));
   await app.register(import("./plugins/helmet.plugin.js"));
+  // Captures the exact raw request bytes onto `request.rawBody` for any
+  // route registered with `config: { rawBody: true }` (both Razorpay
+  // webhook routes already set this) — required for verifying Razorpay's
+  // webhook signature against what it actually signed. `global: false`
+  // keeps this strictly opt-in per route; every other route's JSON body
+  // parsing is unaffected. Must be registered before the routes that use
+  // it, and before rate-limiting so a webhook retry storm can't be limited
+  // out by the JSON-route rate limiter (the route itself already disables
+  // rate limiting too — see payments.routes.js / app.js's /api/webhook).
+  await app.register(import("fastify-raw-body"), {
+    field: "rawBody",
+    global: false,
+    encoding: "utf8",
+    runFirst: true,
+  });
   await app.register(import("./plugins/rateLimit.plugin.js"));
   await app.register(import("./plugins/auth.plugin.js"));
   await app.register(import("./plugins/swagger.plugin.js"));

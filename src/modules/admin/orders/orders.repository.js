@@ -1,10 +1,21 @@
 import { query, getClient } from '../../../config/database.js'
 
 export class AdminOrdersRepository {
-  async findAll({ offset, limit, status, paymentMethod, search, startDate, endDate, deliveryType, shopId }) {
+  async findAll({
+    offset, limit, status, paymentMethod, paymentStatus, search, startDate, endDate,
+    deliveryType, shopId, riderId, minAmount, maxAmount, needsPaymentReview, recoveredFromFailed,
+  }) {
+    // LEFT JOIN payments on the most recent row per order — needed for the
+    // paymentStatus/needsPaymentReview/recoveredFromFailed filters, which
+    // live on `payments`, not `orders`. A LATERAL join picks exactly one
+    // (the latest) payment row per order rather than fanning an order out
+    // across every payment attempt it ever had.
     let sql = `
       SELECT o.*, u.name AS customer_name, u.phone AS customer_phone,
              ru.name AS rider_name, sh.name AS shop_name,
+             p.status AS payment_gateway_status,
+             p.needs_manual_review AS payment_needs_manual_review,
+             p.recovered_from_failed AS payment_recovered_from_failed,
              CASE
                WHEN o.delivery_mode = 'SCHEDULED' THEN 'SCHEDULED'
                WHEN o.quick_delivery_selected = true THEN 'EXPRESS'
@@ -14,6 +25,13 @@ export class AdminOrdersRepository {
       LEFT JOIN users u ON u.id = o.customer_id
       LEFT JOIN users ru ON ru.id = o.rider_id
       LEFT JOIN shops sh ON sh.id = o.shop_id
+      LEFT JOIN LATERAL (
+        SELECT status, needs_manual_review, recovered_from_failed
+        FROM payments
+        WHERE payments.order_id = o.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) p ON true
       WHERE 1=1
     `
     const params = []
@@ -28,6 +46,12 @@ export class AdminOrdersRepository {
     if (shopId) { params.push(shopId); sql += ` AND o.shop_id = $${idx++}` }
     if (status) { params.push(status); sql += ` AND o.status = $${idx++}` }
     if (paymentMethod) { params.push(paymentMethod); sql += ` AND o.payment_method = $${idx++}` }
+    if (paymentStatus) { params.push(paymentStatus); sql += ` AND o.payment_status = $${idx++}` }
+    if (riderId) { params.push(riderId); sql += ` AND o.rider_id = $${idx++}` }
+    if (minAmount !== undefined && minAmount !== null) { params.push(minAmount); sql += ` AND o.total_payable >= $${idx++}` }
+    if (maxAmount !== undefined && maxAmount !== null) { params.push(maxAmount); sql += ` AND o.total_payable <= $${idx++}` }
+    if (needsPaymentReview) { sql += ` AND p.needs_manual_review = true` }
+    if (recoveredFromFailed) { sql += ` AND p.recovered_from_failed = true` }
     if (startDate) { params.push(startDate); sql += ` AND o.created_at >= $${idx++}` }
     if (endDate) { params.push(endDate); sql += ` AND o.created_at <= $${idx++}` }
     if (search) {
@@ -43,8 +67,22 @@ export class AdminOrdersRepository {
       sql += ` AND o.delivery_mode = 'SCHEDULED'`
     }
 
-    const countSql = `SELECT COUNT(*) FROM orders o LEFT JOIN users u ON u.id = o.customer_id WHERE 1=1` +
-      sql.split('WHERE 1=1')[1].replace(/ORDER BY.*$/, '').replace(/LIMIT.*$/, '')
+    // Count query mirrors the exact same WHERE clause and params as the
+    // list query (same JOINs too — the payment-based filters need them)
+    // so pagination totals are never computed against a different filter
+    // set than what's actually displayed.
+    const countSql = `
+      SELECT COUNT(*) FROM orders o
+      LEFT JOIN users u ON u.id = o.customer_id
+      LEFT JOIN LATERAL (
+        SELECT status, needs_manual_review, recovered_from_failed
+        FROM payments
+        WHERE payments.order_id = o.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) p ON true
+      WHERE 1=1
+    ` + sql.split('WHERE 1=1')[1].replace(/ORDER BY.*$/, '').replace(/LIMIT.*$/, '')
     const countRes = await query(countSql, params)
     const total = parseInt(countRes.rows[0].count)
 
@@ -59,13 +97,27 @@ export class AdminOrdersRepository {
     const { rows } = await query(
       `SELECT status, COUNT(*)::int AS count FROM orders GROUP BY status`
     )
-    return rows.reduce((acc, r) => { acc[r.status] = r.count; return acc }, {})
+    const stats = rows.reduce((acc, r) => { acc[r.status] = r.count; return acc }, {})
+
+    const [{ rows: reviewRows }, { rows: recoveredRows }] = await Promise.all([
+      query(`SELECT COUNT(*)::int AS count FROM payments WHERE needs_manual_review = true`),
+      query(`SELECT COUNT(*)::int AS count FROM payments WHERE recovered_from_failed = true`),
+    ])
+    stats.NEEDS_REVIEW = reviewRows[0].count
+    stats.RECOVERED = recoveredRows[0].count
+
+    return stats
   }
 
   async findById(orderId) {
     const { rows } = await query(
       `SELECT o.*, u.name AS customer_name, u.phone AS customer_phone, u.email AS customer_email,
-              ru.name AS rider_name, ru.phone AS rider_phone
+              ru.name AS rider_name, ru.phone AS rider_phone,
+              CASE
+                WHEN o.delivery_mode = 'SCHEDULED' THEN 'SCHEDULED'
+                WHEN o.quick_delivery_selected = true THEN 'EXPRESS'
+                ELSE 'STANDARD'
+              END AS order_type
        FROM orders o
        LEFT JOIN users u ON u.id = o.customer_id
        LEFT JOIN users ru ON ru.id = o.rider_id

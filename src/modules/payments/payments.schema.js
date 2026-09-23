@@ -78,6 +78,37 @@ export const webhookSchema = {
   // No schema validation — webhook body varies by event
 }
 
+export const paymentStatusSchema = {
+  tags: ['Payments'],
+  summary: 'Poll the real, locally-known payment status by Razorpay order id',
+  params: {
+    type: 'object',
+    required: ['razorpayOrderId'],
+    properties: {
+      razorpayOrderId: { type: 'string' },
+    },
+  },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        message: { type: 'string' },
+        data: {
+          type: 'object',
+          properties: {
+            status: { type: 'string' },
+            orderId: { type: 'string', format: 'uuid' },
+            errorCode: { type: ['string', 'null'] },
+            errorDescription: { type: ['string', 'null'] },
+            errorReason: { type: ['string', 'null'] },
+          },
+        },
+      },
+    },
+  },
+}
+
 export const paymentHistorySchema = {
   tags: ['Payments'],
   summary: 'Get payment history for current user',

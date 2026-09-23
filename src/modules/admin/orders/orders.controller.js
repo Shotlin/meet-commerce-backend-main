@@ -21,7 +21,7 @@ export class AdminOrdersController {
 
   async findById(request, reply) {
     try {
-      const data = await this.service.findById(request.params.id)
+      const data = await this.service.findById(request.params.id, request.shopId ?? null)
       return reply.send(success(data, 'Order details'))
     } catch (err) {
       return reply.code(err.statusCode || 500).send(error(err.message))
@@ -30,7 +30,7 @@ export class AdminOrdersController {
 
   async getOrderNotes(request, reply) {
     try {
-      const data = await this.service.getOrderNotes(request.params.id)
+      const data = await this.service.getOrderNotes(request.params.id, request.shopId ?? null)
       return reply.send(success(data, 'Order notes'))
     } catch (err) {
       return reply.code(err.statusCode || 500).send(error(err.message))
@@ -39,7 +39,7 @@ export class AdminOrdersController {
 
   async addOrderNote(request, reply) {
     try {
-      const data = await this.service.addOrderNote(request.params.id, request.user.id, request.body.body, request.ip)
+      const data = await this.service.addOrderNote(request.params.id, request.user.id, request.body.body, request.ip, request.shopId ?? null)
       return reply.code(201).send(success(data, 'Note added'))
     } catch (err) {
       return reply.code(err.statusCode || 500).send(error(err.message))
@@ -49,7 +49,7 @@ export class AdminOrdersController {
   async updateStatus(request, reply) {
     try {
       const { status, note } = request.body
-      const data = await this.service.updateStatus(request.params.id, status, request.user.id, note, request.ip)
+      const data = await this.service.updateStatus(request.params.id, status, request.user.id, note, request.ip, request.shopId ?? null)
       return reply.send(success(data, 'Order status updated'))
     } catch (err) {
       return reply.code(err.statusCode || 500).send(error(err.message))
@@ -63,7 +63,8 @@ export class AdminOrdersController {
         request.params.id,
         { scheduledSlotStart, scheduledSlotEnd, scheduledSlotLabel, reason },
         request.user.id,
-        request.ip
+        request.ip,
+        request.shopId ?? null
       )
       return reply.send(success(data, 'Delivery rescheduled'))
     } catch (err) {
@@ -74,7 +75,7 @@ export class AdminOrdersController {
   async assignRider(request, reply) {
     try {
       const { riderId } = request.body
-      const data = await this.service.assignRider(request.params.id, riderId, request.user.id, request.ip)
+      const data = await this.service.assignRider(request.params.id, riderId, request.user.id, request.ip, request.shopId ?? null)
       return reply.send(success(data, 'Rider assigned'))
     } catch (err) {
       return reply.code(err.statusCode || 500).send(error(err.message))
@@ -83,7 +84,7 @@ export class AdminOrdersController {
 
   async bulkAssign(request, reply) {
     try {
-      const data = await this.service.bulkAssign(request.body.assignments, request.user.id, request.ip)
+      const data = await this.service.bulkAssign(request.body.assignments, request.user.id, request.ip, request.shopId ?? null)
       return reply.send(success(data, 'Bulk assignment done'))
     } catch (err) {
       return reply.code(err.statusCode || 500).send(error(err.message))
@@ -101,7 +102,7 @@ export class AdminOrdersController {
 
   async getInvoice(request, reply) {
     try {
-      const buffer = await this.service.getInvoice(request.params.id)
+      const buffer = await this.service.getInvoice(request.params.id, request.shopId ?? null)
       return reply.type('application/pdf').header('Content-Disposition', `attachment; filename=invoice-${request.params.id}.pdf`).send(buffer)
     } catch (err) {
       return reply.code(err.statusCode || 500).send(error(err.message))
@@ -110,7 +111,7 @@ export class AdminOrdersController {
 
   async getPackingSlip(request, reply) {
     try {
-      const buffer = await this.service.getPackingSlip(request.params.id)
+      const buffer = await this.service.getPackingSlip(request.params.id, request.shopId ?? null)
       return reply.type('application/pdf').header('Content-Disposition', `attachment; filename=packing-slip-${request.params.id}.pdf`).send(buffer)
     } catch (err) {
       return reply.code(err.statusCode || 500).send(error(err.message))
@@ -132,7 +133,8 @@ export class AdminOrdersController {
         request.params.id,
         request.body || {},
         request.user.id,
-        request.ip
+        request.ip,
+        request.shopId ?? null
       )
       return reply.send(success(data, 'Order refunded'))
     } catch (err) {
@@ -146,7 +148,8 @@ export class AdminOrdersController {
         request.params.id,
         request.body || {},
         request.user.id,
-        request.ip
+        request.ip,
+        request.shopId ?? null
       )
       return reply.send(success(data, 'Order cancelled'))
     } catch (err) {
@@ -157,8 +160,45 @@ export class AdminOrdersController {
   async bulkUpdateStatus(request, reply) {
     try {
       const { orderIds, status } = request.body
-      const data = await this.service.bulkUpdateStatus(orderIds, status, request.user.id, request.ip)
+      const data = await this.service.bulkUpdateStatus(orderIds, status, request.user.id, request.ip, request.shopId ?? null)
       return reply.send(success(data, 'Bulk status update done'))
+    } catch (err) {
+      return reply.code(err.statusCode || 500).send(error(err.message))
+    }
+  }
+
+  /**
+   * "Re-check with Razorpay" — a live, server-to-server reconciliation for
+   * one order. Shown by the dashboard when a payment is PENDING or flagged
+   * `needs_manual_review`.
+   */
+  async reconcilePayment(request, reply) {
+    try {
+      const data = await this.service.reconcilePayment(request.params.id, request.shopId ?? null)
+      return reply.send(success(data, 'Payment reconciled'))
+    } catch (err) {
+      return reply.code(err.statusCode || 500).send(error(err.message))
+    }
+  }
+
+  async bulkReconcilePayments(request, reply) {
+    try {
+      const data = await this.service.bulkReconcilePayments(request.body.orderIds, request.shopId ?? null)
+      return reply.send(success(data, 'Bulk reconciliation done'))
+    } catch (err) {
+      return reply.code(err.statusCode || 500).send(error(err.message))
+    }
+  }
+
+  /**
+   * Live Razorpay payment detail — fetched server-side with our Razorpay
+   * secret, never exposed to the browser. Only the fields the dashboard
+   * actually needs are returned.
+   */
+  async getRazorpayDetails(request, reply) {
+    try {
+      const data = await this.service.getRazorpayDetails(request.params.id, request.shopId ?? null)
+      return reply.send(success(data, 'Razorpay payment detail'))
     } catch (err) {
       return reply.code(err.statusCode || 500).send(error(err.message))
     }

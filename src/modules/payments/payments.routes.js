@@ -4,6 +4,7 @@ import { PaymentsRepository } from './payments.repository.js'
 import {
   createPaymentOrderSchema,
   verifyPaymentSchema,
+  paymentStatusSchema,
   paymentHistorySchema,
   refundSchema,
 } from './payments.schema.js'
@@ -36,6 +37,13 @@ export default async function paymentsRoutes(fastify) {
     schema: paymentHistorySchema,
     preHandler: [fastify.authenticate],
   }, controller.history.bind(controller))
+
+  // GET /status/:razorpayOrderId — "what's the real payment status?" poll,
+  // for an ambiguous client-side Razorpay callback outcome.
+  fastify.get('/status/:razorpayOrderId', {
+    schema: paymentStatusSchema,
+    preHandler: [fastify.authenticate],
+  }, controller.status.bind(controller))
 
   // ─── Webhook (NO AUTH — verified by Razorpay signature) ────────────
 

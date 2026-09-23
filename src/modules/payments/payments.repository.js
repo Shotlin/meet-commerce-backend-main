@@ -50,6 +50,36 @@ export class PaymentsRepository {
   }
 
   /**
+   * Same lookup, but row-locked inside the caller's transaction. This is
+   * the idempotency primitive for `PaymentsService#completeVerifiedPayment`
+   * — two racing finalizers (e.g. the client's `/verify` call and the
+   * webhook's `payment.captured` event landing at nearly the same moment)
+   * serialize on this lock; whichever acquires it second sees the first
+   * one's committed `status = 'PAID'` and safely no-ops instead of running
+   * the confirmation cascade twice.
+   */
+  async findByRazorpayOrderIdForUpdate(client, razorpayOrderId) {
+    const { rows } = await client.query(
+      `SELECT * FROM payments WHERE razorpay_order_id = $1 FOR UPDATE`,
+      [razorpayOrderId]
+    )
+    return rows[0] ? this._format(rows[0]) : null
+  }
+
+  /**
+   * Find payment by Razorpay payment ID — the only identifier a
+   * `refund.processed` webhook payload actually carries (it has no
+   * razorpay_order_id).
+   */
+  async findByRazorpayPaymentId(razorpayPaymentId) {
+    const { rows } = await query(
+      `SELECT * FROM payments WHERE razorpay_payment_id = $1`,
+      [razorpayPaymentId]
+    )
+    return rows[0] ? this._format(rows[0]) : null
+  }
+
+  /**
    * Find payment by order ID
    */
   async findByOrderId(orderId) {
@@ -61,9 +91,13 @@ export class PaymentsRepository {
   }
 
   /**
-   * Update payment after verification
+   * Update payment after verification. Pass `client` (a transaction client
+   * from `getClient()`) to run inside the caller's own transaction — every
+   * call from `completeVerifiedPayment` does this, since the row is already
+   * locked there via `findByRazorpayOrderIdForUpdate`.
    */
-  async updatePayment(id, data) {
+  async updatePayment(id, data, client = null) {
+    const runner = client || { query: (text, params) => query(text, params) }
     const sets = ['updated_at = NOW()']
     const params = []
     let idx = 1
@@ -88,10 +122,42 @@ export class PaymentsRepository {
       sets.push(`metadata = $${idx++}`)
       params.push(JSON.stringify(data.metadata))
     }
+    if (data.needsManualReview !== undefined) {
+      sets.push(`needs_manual_review = $${idx++}`)
+      params.push(!!data.needsManualReview)
+    }
+    if (data.recoveredFromFailed !== undefined) {
+      sets.push(`recovered_from_failed = $${idx++}`)
+      params.push(!!data.recoveredFromFailed)
+    }
+    if (data.reviewReason !== undefined) {
+      sets.push(`review_reason = $${idx++}`)
+      params.push(data.reviewReason)
+    }
+    if (data.errorCode !== undefined) {
+      sets.push(`error_code = $${idx++}`)
+      params.push(data.errorCode)
+    }
+    if (data.errorDescription !== undefined) {
+      sets.push(`error_description = $${idx++}`)
+      params.push(data.errorDescription)
+    }
+    if (data.errorSource !== undefined) {
+      sets.push(`error_source = $${idx++}`)
+      params.push(data.errorSource)
+    }
+    if (data.errorStep !== undefined) {
+      sets.push(`error_step = $${idx++}`)
+      params.push(data.errorStep)
+    }
+    if (data.errorReason !== undefined) {
+      sets.push(`error_reason = $${idx++}`)
+      params.push(data.errorReason)
+    }
 
     params.push(id)
 
-    const { rows } = await query(
+    const { rows } = await runner.query(
       `UPDATE payments SET ${sets.join(', ')} WHERE id = $${idx} RETURNING *`,
       params
     )
@@ -173,6 +239,14 @@ export class PaymentsRepository {
       refundAmount: row.refund_amount ? parseFloat(row.refund_amount) : null,
       refundStatus: row.refund_status,
       metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata,
+      needsManualReview: !!row.needs_manual_review,
+      recoveredFromFailed: !!row.recovered_from_failed,
+      reviewReason: row.review_reason || null,
+      errorCode: row.error_code || null,
+      errorDescription: row.error_description || null,
+      errorSource: row.error_source || null,
+      errorStep: row.error_step || null,
+      errorReason: row.error_reason || null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }
