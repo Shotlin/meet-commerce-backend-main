@@ -6,7 +6,11 @@ export class AdminOrdersController {
   }
 
   async findAll(request, reply) {
-    const data = await this.service.findAll(request.query)
+    // `request.shopId` is set by the shared `requireShopScope` preHandler —
+    // a shop-staff JWT's own shop, or an HQ user's optional X-Shop-Id
+    // header (null = "All Shops", the only value that ever meant "every
+    // permitted order" pre-fix, and still does).
+    const data = await this.service.findAll({ ...request.query, shopId: request.shopId ?? null })
     return reply.send(success(data, 'Orders fetched'))
   }
 

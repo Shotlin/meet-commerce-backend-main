@@ -1,6 +1,7 @@
 import { AdminOrdersRepository } from './orders.repository.js'
 import { AdminOrdersService } from './orders.service.js'
 import { AdminOrdersController } from './orders.controller.js'
+import { requireShopScope } from '../../../middlewares/shop-scope.js'
 import {
   listOrdersSchema, statsByStatusSchema, orderDetailSchema,
   updateStatusSchema, assignRiderSchema, bulkAssignSchema,
@@ -18,8 +19,15 @@ export default async function adminOrdersRoutes(fastify) {
   const service = new AdminOrdersService(repo, fastify)
   const ctrl = new AdminOrdersController(service)
   const adminAuth = [fastify.authenticate, fastify.requireAdmin]
+  // GET / (listing) additionally resolves request.shopId — an HQ user's
+  // optional X-Shop-Id header (null = "All Shops"), or a shop-scoped
+  // staff JWT's own shop. Previously this endpoint had no shop-scope
+  // resolution at all, so the dashboard's branch selector filtered
+  // nothing server-side and every admin saw every order regardless of
+  // which branch was selected.
+  const adminAuthShopScoped = [fastify.authenticate, fastify.requireAdmin, requireShopScope()]
 
-  fastify.get('/', { schema: listOrdersSchema, preHandler: adminAuth }, ctrl.findAll.bind(ctrl))
+  fastify.get('/', { schema: listOrdersSchema, preHandler: adminAuthShopScoped }, ctrl.findAll.bind(ctrl))
   fastify.get('/stats-by-status', { schema: statsByStatusSchema, preHandler: adminAuth }, ctrl.getStatsByStatus.bind(ctrl))
   fastify.get('/export', { schema: exportSchema, preHandler: adminAuth }, ctrl.exportCSV.bind(ctrl))
   fastify.post('/manual', { schema: manualOrderSchema, preHandler: adminAuth }, ctrl.createManualOrder.bind(ctrl))

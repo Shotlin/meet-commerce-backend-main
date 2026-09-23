@@ -15,23 +15,50 @@ export class OrdersRepository {
    */
   async generateCheckoutOrderNumber(client, shopId) {
     const { rows: shops } = await client.query(
-      `SELECT COALESCE(NULLIF(order_prefix, ''), 'SHOP') AS order_prefix
+      // 'STR' (3 chars), not the old 'SHOP' (4) — with an 8-digit date and
+      // 4-digit sequence, only a 3-char-or-shorter prefix keeps
+      // "FC-<prefix>-YYYYMMDD-NNNN" at or under the 20-char column limit;
+      // 'SHOP' itself silently overflowed it (caught by this fix's own
+      // regression test).
+      `SELECT COALESCE(NULLIF(order_prefix, ''), 'STR') AS order_prefix
          FROM shops WHERE id = $1 FOR SHARE`,
       [shopId]
     )
     if (!shops[0]) throw new Error('Store not found for order')
 
     const { rows } = await client.query(
+      // `order_date::text` forces Postgres itself to format the DATE as
+      // 'YYYY-MM-DD' before it ever reaches node-postgres. Without the
+      // cast, `pg`'s default type parser (OID 1082) returns a native JS
+      // Date object; `String(dateObject)` then stringifies as
+      // "Wed Sep 23 2026 00:00:00 GMT+0000 (...)" — no dashes for
+      // `.replaceAll('-','')` to strip, and `.slice(0,10)` grabs
+      // "Wed Sep 23" (10 chars, with a space) instead of "20260923".
+      // The resulting order number ("FC-KOL-Wed Sep 23-0001", 22 chars)
+      // always overflowed `orders.order_number VARCHAR(20)` — every
+      // single order placement, for every store, on every day, failed
+      // on this INSERT with a raw "value too long for type character
+      // varying(20)" surfaced to the customer as "Internal server error".
       `INSERT INTO order_number_sequences (shop_id, order_date, last_value)
        VALUES ($1, CURRENT_DATE, 1)
        ON CONFLICT (shop_id, order_date)
        DO UPDATE SET last_value = order_number_sequences.last_value + 1
-       RETURNING order_date, last_value`,
+       RETURNING order_date::text, last_value`,
       [shopId]
     )
-    const date = String(rows[0].order_date).slice(0, 10).replaceAll('-', '')
+    const date = rows[0].order_date.replaceAll('-', '')
     const sequence = String(rows[0].last_value).padStart(4, '0')
-    return `FC-${shops[0].order_prefix}-${date}-${sequence}`
+    const orderNumber = `FC-${shops[0].order_prefix}-${date}-${sequence}`
+    // Belt-and-braces: a shop with a longer order_prefix (a real risk once
+    // more stores exist — see §7.2 point 2 in CLAUDE.md) must fail with a
+    // clear, actionable error instead of the same opaque DB overflow this
+    // whole fix was written to eliminate.
+    if (orderNumber.length > 20) {
+      throw new Error(
+        `Generated order number "${orderNumber}" exceeds 20 characters — shorten shops.order_prefix for this store (currently "${shops[0].order_prefix}").`
+      )
+    }
+    return orderNumber
   }
 
   /** Create a store-scoped checkout order and its immutable item snapshots. */

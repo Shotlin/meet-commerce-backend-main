@@ -1,7 +1,7 @@
 import { query, getClient } from '../../../config/database.js'
 
 export class AdminOrdersRepository {
-  async findAll({ offset, limit, status, paymentMethod, search, startDate, endDate, deliveryType }) {
+  async findAll({ offset, limit, status, paymentMethod, search, startDate, endDate, deliveryType, shopId }) {
     let sql = `
       SELECT o.*, u.name AS customer_name, u.phone AS customer_phone,
              ru.name AS rider_name, sh.name AS shop_name,
@@ -19,6 +19,13 @@ export class AdminOrdersRepository {
     const params = []
     let idx = 1
 
+    // Shop scope — `shopId` is `request.shopId` as resolved by the shared
+    // `requireShopScope` middleware (shop-staff JWT, else HQ's optional
+    // X-Shop-Id header). `null` means "All Shops" for an HQ user; a
+    // shop-scoped staff JWT always carries a concrete value, so this branch
+    // is the ONLY thing that actually enforces per-branch order history —
+    // previously the dashboard's shop selector filtered nothing server-side.
+    if (shopId) { params.push(shopId); sql += ` AND o.shop_id = $${idx++}` }
     if (status) { params.push(status); sql += ` AND o.status = $${idx++}` }
     if (paymentMethod) { params.push(paymentMethod); sql += ` AND o.payment_method = $${idx++}` }
     if (startDate) { params.push(startDate); sql += ` AND o.created_at >= $${idx++}` }
