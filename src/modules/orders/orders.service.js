@@ -252,7 +252,7 @@ export class OrdersService {
           })
         }
         await this.repository.logStatusTransition(
-          row.id, null, 'ORDER_PLACED', customerId, 'Order placed from mobile checkout'
+          row.id, null, 'ORDER_PLACED', customerId, 'Order placed from mobile checkout', client
         )
         created.push(this.repository._formatCheckoutOrder(row))
       }

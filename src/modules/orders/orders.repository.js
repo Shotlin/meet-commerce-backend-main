@@ -217,7 +217,7 @@ export class OrdersRepository {
     const order = rows[0]
     const itemsRes = await query(`SELECT * FROM order_items WHERE order_id = $1 ORDER BY created_at ASC`, [orderId])
     const tasksRes = await query(`SELECT * FROM fulfilment_tasks WHERE order_id = $1 ORDER BY created_at ASC`, [orderId])
-    const historyRes = await query(`SELECT * FROM order_status_history WHERE order_id = $1 ORDER BY created_at ASC`, [orderId])
+    const historyRes = await query(`SELECT * FROM order_status_history WHERE order_id = $1 ORDER BY changed_at ASC`, [orderId])
 
     return { ...order, items: itemsRes.rows, fulfilment_tasks: tasksRes.rows, status_history: historyRes.rows }
   }
@@ -267,9 +267,23 @@ export class OrdersRepository {
     return this.updateStatus(orderId, status)
   }
 
-  async logStatusTransition(orderId, fromStatus, toStatus, actorId = null, notes = null) {
-    const { rows } = await query(
-      `INSERT INTO order_status_history (order_id, from_status, to_status, actor_id, notes)
+  // `order_status_history` was first created by migration 015 with columns
+  // `changed_by`/`note`/`changed_at` (every other module — admin/orders,
+  // delivery, shop-orders, invoiceGenerator.js — inserts/reads those). A
+  // later migration (106) tried to redefine the table with `actor_id`/
+  // `notes`/`created_at`, but its `CREATE TABLE IF NOT EXISTS` was a no-op
+  // against the already-existing 015 table, so those columns never actually
+  // existed in any deployed database — this INSERT failed with "column
+  // actor_id does not exist" on every call, which is what made every order
+  // placement 500 even after the order-number bug (§7.2) was fixed.
+  // `client` lets a caller inside its own BEGIN/COMMIT (placeOrder) run this
+  // on that same transaction connection — required, since the order row it
+  // references via `order_id` isn't visible to a different pool connection
+  // until that transaction commits.
+  async logStatusTransition(orderId, fromStatus, toStatus, actorId = null, notes = null, client = null) {
+    const runner = client || { query: (text, params) => query(text, params) }
+    const { rows } = await runner.query(
+      `INSERT INTO order_status_history (order_id, from_status, to_status, changed_by, note)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
       [orderId, fromStatus, toStatus, actorId, notes]

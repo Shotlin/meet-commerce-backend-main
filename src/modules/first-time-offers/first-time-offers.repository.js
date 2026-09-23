@@ -84,7 +84,7 @@ export class FirstTimeOffersRepository {
   async hasPriorOrder(userId) {
     const { rows } = await query(
       `SELECT EXISTS(
-         SELECT 1 FROM orders WHERE user_id = $1 AND status != 'CANCELLED'
+         SELECT 1 FROM orders WHERE customer_id = $1 AND status != 'CANCELLED'
        ) AS has_prior`,
       [userId]
     )
