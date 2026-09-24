@@ -157,16 +157,235 @@ export class AdminOrdersService {
   }
 
   async findById(orderId, requestShopId = null) {
-    const [order, items, timeline, payment, delivery] = await Promise.all([
+    const [order, items, timeline, payment, delivery, settlementHistory] = await Promise.all([
       this.repository.findById(orderId),
       this.repository.getOrderItems(orderId),
       this.repository.getOrderTimeline(orderId),
       this.repository.getOrderPayment(orderId),
       this.repository.getOrderDelivery(orderId),
+      this.repository.getSettlementHistory(orderId),
     ])
     if (!order) throw { statusCode: 404, message: 'Order not found' }
     this._assertShopAccess(order, requestShopId)
-    return { ...order, items, timeline, payment, delivery }
+    return { ...order, items, timeline, payment, delivery, settlement: this._buildSettlementSummary(order, settlementHistory) }
+  }
+
+  /**
+   * Manual payment settlement — for an order delivered outside the rider
+   * app / online-payment flow, an admin/finance user records that cash or
+   * UPI was actually collected. `orders.payment_status` never flips to
+   * PAID on its own just because the order reached DELIVERED — see the
+   * (deliberately separate) order-status state machine above; a delivered
+   * COD order stays PENDING/PARTIALLY_PAID until someone records the real
+   * collection here. Every entry is immutable — a mistake is corrected
+   * with a REVERSAL entry (see `reverseSettlement`), never an edit/delete.
+   */
+  _buildSettlementSummary(order, history) {
+    const totalPayable = Number(order.total_payable || 0)
+    const walletAmount = Number(order.wallet_amount || 0)
+    const outstanding = Number((totalPayable - walletAmount).toFixed(2))
+    const received = Number(
+      history.reduce((sum, e) => sum + (e.entry_type === 'REVERSAL' ? -Number(e.amount) : Number(e.amount)), 0).toFixed(2)
+    )
+    // An order can already be PAID with zero rows in this table at all —
+    // Razorpay online payment (`payments.service.js#completeVerifiedPayment`)
+    // and a wallet balance covering the order in full both set
+    // `payment_status = 'PAID'` directly, never touching manual
+    // settlements. Without this check, `outstanding - received` would show
+    // the FULL amount as still due on an already-paid online order (and
+    // let an admin "collect" money nobody actually owes) — existing
+    // online-paid orders must keep showing ₹0 due, exactly as before.
+    const amountDue = order.payment_status === 'PAID'
+      ? 0
+      : Math.max(0, Number((outstanding - received).toFixed(2)))
+    // The most recent entry that actually completed a PAID order — used to
+    // show "Settled by / Settled at" in the summary; a reversal or a
+    // still-partial history has no such entry, and the panel shows the
+    // raw history list instead.
+    const completingEntry = order.payment_status === 'PAID'
+      ? [...history].reverse().find((e) => e.entry_type === 'SETTLEMENT')
+      : null
+    return {
+      totalPayable,
+      walletAmount,
+      outstanding,
+      received,
+      amountDue,
+      paymentStatus: order.payment_status,
+      history: history.map((e) => ({
+        id: e.id,
+        entryType: e.entry_type,
+        amount: Number(e.amount),
+        method: e.method,
+        cashAmount: Number(e.cash_amount || 0),
+        upiAmount: Number(e.upi_amount || 0),
+        reference: e.reference,
+        methodNote: e.method_note,
+        internalNote: e.internal_note,
+        reversesEntryId: e.reverses_entry_id,
+        recordedBy: e.recorded_by,
+        recordedByName: e.recorded_by_name,
+        createdAt: e.created_at,
+      })),
+      settledBy: completingEntry?.recorded_by_name || null,
+      settledAt: completingEntry?.created_at || null,
+    }
+  }
+
+  async getSettlementInfo(orderId, requestShopId = null) {
+    const order = await this.repository.findById(orderId)
+    if (!order) throw { statusCode: 404, message: 'Order not found' }
+    this._assertShopAccess(order, requestShopId)
+    const history = await this.repository.getSettlementHistory(orderId)
+    return this._buildSettlementSummary(order, history)
+  }
+
+  _deriveSettlementStatus(received, outstanding) {
+    if (outstanding <= 0.005) return 'PAID'
+    if (received >= outstanding - 0.005) return 'PAID'
+    if (received > 0.005) return 'PARTIALLY_PAID'
+    return 'PENDING'
+  }
+
+  async recordSettlement(orderId, payload, adminUserId, requestShopId = null) {
+    const amount = Number(payload.amount)
+    const method = String(payload.method || '').toUpperCase()
+    const cashAmount = Number(payload.cashAmount || 0)
+    const upiAmount = Number(payload.upiAmount || 0)
+    const reference = payload.reference?.trim() || null
+    const methodNote = payload.methodNote?.trim() || null
+    const internalNote = payload.internalNote?.trim() || null
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw { statusCode: 400, message: 'Amount received must be greater than 0', code: 'INVALID_AMOUNT' }
+    }
+    if (!['CASH', 'UPI', 'CASH_UPI', 'OTHER'].includes(method)) {
+      throw { statusCode: 400, message: 'Invalid payment method', code: 'INVALID_METHOD' }
+    }
+    if (method === 'CASH_UPI') {
+      if (Number((cashAmount + upiAmount).toFixed(2)) !== Number(amount.toFixed(2))) {
+        throw { statusCode: 400, message: 'Cash Amount + UPI Amount must equal the amount received', code: 'SPLIT_MISMATCH' }
+      }
+    }
+    if (method === 'OTHER' && !methodNote) {
+      throw { statusCode: 400, message: 'A payment-method note is required for "Other"', code: 'METHOD_NOTE_REQUIRED' }
+    }
+
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const order = await this.repository.findByIdForUpdate(client, orderId)
+      if (!order) throw { statusCode: 404, message: 'Order not found' }
+      this._assertShopAccess(order, requestShopId)
+
+      if (order.payment_status === 'PAID') {
+        throw { statusCode: 400, message: 'This order is already fully paid', code: 'NOTHING_DUE' }
+      }
+
+      const totalPayable = Number(order.total_payable || 0)
+      const walletAmount = Number(order.wallet_amount || 0)
+      const outstanding = Number((totalPayable - walletAmount).toFixed(2))
+      const history = await this.repository.getSettlementHistory(orderId, client)
+      const receivedSoFar = Number(
+        history.reduce((sum, e) => sum + (e.entry_type === 'REVERSAL' ? -Number(e.amount) : Number(e.amount)), 0).toFixed(2)
+      )
+      const amountDue = Number((outstanding - receivedSoFar).toFixed(2))
+
+      if (amountDue <= 0.005) {
+        throw { statusCode: 400, message: 'This order has no outstanding balance to settle', code: 'NOTHING_DUE' }
+      }
+      // A small epsilon, not zero, so an admin entering the exact due
+      // amount (e.g. ₹380.00 against a ₹380.00 balance) isn't rejected by
+      // a floating-point rounding artifact.
+      if (amount > amountDue + 0.01) {
+        throw { statusCode: 400, message: `Amount received (₹${amount}) exceeds the outstanding balance (₹${amountDue})`, code: 'EXCEEDS_OUTSTANDING' }
+      }
+
+      const entry = await this.repository.insertSettlementEntry(client, {
+        orderId, entryType: 'SETTLEMENT', amount, method, cashAmount, upiAmount,
+        reference, methodNote, internalNote, recordedBy: adminUserId,
+      })
+
+      const newReceived = Number((receivedSoFar + amount).toFixed(2))
+      const newStatus = this._deriveSettlementStatus(newReceived, outstanding)
+      await this.repository.setPaymentStatus(client, orderId, newStatus)
+
+      await client.query('COMMIT')
+
+      logAdminActivity(adminUserId, `Recorded payment settlement: ₹${amount} via ${method}`, 'order', orderId,
+        { paymentStatus: order.payment_status }, { paymentStatus: newStatus, entryId: entry.id }, null)
+
+      logger.info({ orderId, amount, method, newStatus, adminUserId }, 'Payment settlement recorded')
+      const updatedHistory = await this.repository.getSettlementHistory(orderId)
+      const updatedOrder = await this.repository.findById(orderId)
+      return this._buildSettlementSummary(updatedOrder, updatedHistory)
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
+  }
+
+  /**
+   * Corrects a mistaken settlement entry without ever editing/deleting it —
+   * inserts a REVERSAL row for the same amount and recomputes
+   * `payment_status` downward from there (PAID → PARTIALLY_PAID/PENDING,
+   * or PARTIALLY_PAID → PENDING), exactly the same derivation
+   * `recordSettlement` uses, just with the entry's amount subtracted
+   * instead of added.
+   */
+  async reverseSettlement(orderId, entryId, reason, adminUserId, requestShopId = null) {
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const order = await this.repository.findByIdForUpdate(client, orderId)
+      if (!order) throw { statusCode: 404, message: 'Order not found' }
+      this._assertShopAccess(order, requestShopId)
+
+      const history = await this.repository.getSettlementHistory(orderId, client)
+      const original = history.find((e) => e.id === entryId && e.entry_type === 'SETTLEMENT')
+      if (!original) {
+        throw { statusCode: 404, message: 'Settlement entry not found', code: 'ENTRY_NOT_FOUND' }
+      }
+      const alreadyReversed = history.some((e) => e.entry_type === 'REVERSAL' && e.reverses_entry_id === entryId)
+      if (alreadyReversed) {
+        throw { statusCode: 400, message: 'This entry has already been reversed', code: 'ALREADY_REVERSED' }
+      }
+
+      const reversal = await this.repository.insertSettlementEntry(client, {
+        orderId, entryType: 'REVERSAL', amount: Number(original.amount), method: original.method,
+        cashAmount: Number(original.cash_amount || 0), upiAmount: Number(original.upi_amount || 0),
+        reference: original.reference, methodNote: original.method_note,
+        internalNote: reason?.trim() || `Reversal of settlement ${entryId}`,
+        reversesEntryId: entryId, recordedBy: adminUserId,
+      })
+
+      const totalPayable = Number(order.total_payable || 0)
+      const walletAmount = Number(order.wallet_amount || 0)
+      const outstanding = Number((totalPayable - walletAmount).toFixed(2))
+      const receivedSoFar = Number(
+        history.reduce((sum, e) => sum + (e.entry_type === 'REVERSAL' ? -Number(e.amount) : Number(e.amount)), 0).toFixed(2)
+      )
+      const newReceived = Number((receivedSoFar - Number(original.amount)).toFixed(2))
+      const newStatus = this._deriveSettlementStatus(newReceived, outstanding)
+      await this.repository.setPaymentStatus(client, orderId, newStatus)
+
+      await client.query('COMMIT')
+
+      logAdminActivity(adminUserId, `Reversed payment settlement of ₹${original.amount} (${reason || 'no reason given'})`, 'order', orderId,
+        { paymentStatus: order.payment_status }, { paymentStatus: newStatus, reversalId: reversal.id }, null)
+
+      logger.info({ orderId, entryId, newStatus, adminUserId }, 'Payment settlement reversed')
+      const updatedHistory = await this.repository.getSettlementHistory(orderId)
+      const updatedOrder = await this.repository.findById(orderId)
+      return this._buildSettlementSummary(updatedOrder, updatedHistory)
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
   }
 
   async getOrderNotes(orderId, requestShopId = null) {

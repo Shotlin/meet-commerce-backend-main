@@ -208,4 +208,33 @@ export class AdminOrdersController {
       return reply.code(err.statusCode || 500).send(error(err.message))
     }
   }
+
+  async getSettlementInfo(request, reply) {
+    try {
+      const data = await this.service.getSettlementInfo(request.params.id, request.shopId ?? null)
+      return reply.send(success(data, 'Settlement info'))
+    } catch (err) {
+      return reply.code(err.statusCode || 500).send(error(err.message))
+    }
+  }
+
+  async recordSettlement(request, reply) {
+    try {
+      const data = await this.service.recordSettlement(request.params.id, request.body, request.user.id, request.shopId ?? null)
+      return reply.code(201).send(success(data, 'Payment settlement recorded'))
+    } catch (err) {
+      return reply.code(err.statusCode || 500).send(error(err.message))
+    }
+  }
+
+  async reverseSettlement(request, reply) {
+    try {
+      const data = await this.service.reverseSettlement(
+        request.params.id, request.params.entryId, request.body?.reason, request.user.id, request.shopId ?? null
+      )
+      return reply.send(success(data, 'Payment settlement reversed'))
+    } catch (err) {
+      return reply.code(err.statusCode || 500).send(error(err.message))
+    }
+  }
 }

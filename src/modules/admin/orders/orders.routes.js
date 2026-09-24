@@ -9,7 +9,7 @@ import {
   refundOrderSchema, cancelOrderSchema, bulkStatusSchema,
   rescheduleOrderSchema, orderNotesListSchema, addOrderNoteSchema,
   reconcilePaymentSchema, bulkReconcilePaymentsSchema, razorpayDetailsSchema,
-  settlementSummarySchema,
+  settlementSummarySchema, settlementInfoSchema, recordSettlementSchema, reverseSettlementSchema,
 } from './orders.schema.js'
 
 /**
@@ -65,4 +65,9 @@ export default async function adminOrdersRoutes(fastify) {
   fastify.post('/:id/cancel', { schema: cancelOrderSchema, preHandler: adminAuthShopScoped }, ctrl.cancelOrder.bind(ctrl))
   fastify.post('/:id/reconcile-payment', { schema: reconcilePaymentSchema, preHandler: adminAuthShopScoped }, ctrl.reconcilePayment.bind(ctrl))
   fastify.get('/:id/razorpay-details', { schema: razorpayDetailsSchema, preHandler: adminAuthShopScoped }, ctrl.getRazorpayDetails.bind(ctrl))
+  // Manual payment settlement (cash/UPI collected outside the rider app /
+  // online-payment flow) — see AdminOrdersService#recordSettlement.
+  fastify.get('/:id/settlements', { schema: settlementInfoSchema, preHandler: adminAuthShopScoped }, ctrl.getSettlementInfo.bind(ctrl))
+  fastify.post('/:id/settlements', { schema: recordSettlementSchema, preHandler: adminAuthShopScoped }, ctrl.recordSettlement.bind(ctrl))
+  fastify.post('/:id/settlements/:entryId/reverse', { schema: reverseSettlementSchema, preHandler: adminAuthShopScoped }, ctrl.reverseSettlement.bind(ctrl))
 }

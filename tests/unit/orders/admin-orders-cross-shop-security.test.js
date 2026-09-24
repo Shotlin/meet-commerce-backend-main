@@ -42,6 +42,7 @@ function makeService(overrides = {}) {
     getOrderTimeline: vi.fn(async () => []),
     getOrderPayment: vi.fn(async () => null),
     getOrderDelivery: vi.fn(async () => null),
+    getSettlementHistory: vi.fn(async () => []),
     getOrderNotes: vi.fn(async () => []),
     addOrderNote: vi.fn(async () => ({})),
     updateStatus: vi.fn(async () => 'CONFIRMED'),

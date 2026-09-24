@@ -242,6 +242,50 @@ export const razorpayDetailsSchema = {
   params: uuidParam,
 }
 
+export const settlementInfoSchema = {
+  tags: ['Admin Orders'],
+  summary: 'Manual payment settlement summary + immutable history for this order',
+  params: uuidParam,
+}
+
+export const recordSettlementSchema = {
+  tags: ['Admin Orders'],
+  summary: 'Record a manual payment collection (cash/UPI/other) against this order',
+  params: uuidParam,
+  body: {
+    type: 'object',
+    required: ['amount', 'method'],
+    properties: {
+      amount: { type: 'number', exclusiveMinimum: 0 },
+      method: { type: 'string', enum: ['CASH', 'UPI', 'CASH_UPI', 'OTHER'] },
+      cashAmount: { type: 'number', minimum: 0 },
+      upiAmount: { type: 'number', minimum: 0 },
+      reference: { type: 'string', maxLength: 150 },
+      methodNote: { type: 'string', maxLength: 500 },
+      internalNote: { type: 'string', maxLength: 1000 },
+    },
+  },
+}
+
+export const reverseSettlementSchema = {
+  tags: ['Admin Orders'],
+  summary: 'Reverse a mistaken settlement entry via a controlled, audited adjustment — never edits/deletes the original',
+  params: {
+    type: 'object',
+    required: ['id', 'entryId'],
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      entryId: { type: 'string', format: 'uuid' },
+    },
+  },
+  body: {
+    type: 'object',
+    properties: {
+      reason: { type: 'string', maxLength: 500 },
+    },
+  },
+}
+
 export const bulkStatusSchema = {
   tags: ['Admin Orders'],
   summary: 'Bulk update status for multiple orders',

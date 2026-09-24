@@ -255,6 +255,54 @@ export class AdminOrdersRepository {
     return rows[0] || null
   }
 
+  /**
+   * The order's own row, locked, for the settlement transaction — needs to
+   * be read-then-written atomically with the settlement history so two
+   * concurrent "Record Payment" submissions can never both believe the
+   * full outstanding balance is still available.
+   */
+  async findByIdForUpdate(client, orderId) {
+    const { rows } = await client.query('SELECT * FROM orders WHERE id = $1 FOR UPDATE', [orderId])
+    return rows[0] || null
+  }
+
+  async getSettlementHistory(orderId, client = null) {
+    const runner = client || { query: (text, params) => query(text, params) }
+    const { rows } = await runner.query(
+      `SELECT s.*, u.name AS recorded_by_name
+       FROM order_payment_settlements s
+       LEFT JOIN users u ON u.id = s.recorded_by
+       WHERE s.order_id = $1
+       ORDER BY s.created_at ASC`,
+      [orderId]
+    )
+    return rows
+  }
+
+  async insertSettlementEntry(client, data) {
+    const { rows } = await client.query(
+      `INSERT INTO order_payment_settlements (
+        order_id, entry_type, amount, method, cash_amount, upi_amount,
+        reference, method_note, internal_note, reverses_entry_id, recorded_by
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      RETURNING *`,
+      [
+        data.orderId, data.entryType, data.amount, data.method,
+        data.cashAmount || 0, data.upiAmount || 0, data.reference || null,
+        data.methodNote || null, data.internalNote || null,
+        data.reversesEntryId || null, data.recordedBy,
+      ]
+    )
+    return rows[0]
+  }
+
+  async setPaymentStatus(client, orderId, paymentStatus) {
+    await client.query(
+      `UPDATE orders SET payment_status = $1, updated_at = NOW() WHERE id = $2`,
+      [paymentStatus, orderId]
+    )
+  }
+
   async updateStatus(orderId, newStatus, adminId, note) {
     const client = await getClient()
     try {
