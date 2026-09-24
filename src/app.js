@@ -267,6 +267,16 @@ export const buildApp = async () => {
     },
   );
 
+  // Razorpay settings [ADMIN] — dashboard-managed TEST/PRODUCTION
+  // credentials (paste, test, save, activate), source of truth for
+  // src/config/razorpay.js (see src/modules/razorpay-settings)
+  await app.register(
+    import("./modules/razorpay-settings/razorpay-settings.routes.js"),
+    {
+      prefix: "/api/v1/admin/razorpay-settings",
+    },
+  );
+
   // Admin — fully implemented
   await app.register(import("./modules/admin/admin.routes.js"), {
     prefix: "/api/v1/admin",

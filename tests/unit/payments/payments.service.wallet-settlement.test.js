@@ -17,7 +17,14 @@ vi.mock('../../../src/config/database.js', () => ({
   getClient: vi.fn(async () => mockClient),
   closePool: vi.fn(),
 }))
-vi.mock('../../../src/config/razorpay.js', () => ({ razorpay: { orders: { create: vi.fn() } } }))
+vi.mock('../../../src/config/razorpay.js', () => ({
+  razorpay: { orders: { create: vi.fn() } },
+  getRazorpayKeyId: () => 'rzp_test_key',
+  getRazorpayKeySecret: () => 'secret',
+  getRazorpayWebhookSecret: () => undefined,
+  getRazorpayMode: () => 'TEST',
+  refreshRazorpayClient: vi.fn(),
+}))
 vi.mock('../../../src/config/env.js', () => ({ env: { RAZORPAY_KEY_ID: 'rzp_test_key', RAZORPAY_KEY_SECRET: 'secret' } }))
 vi.mock('../../../src/config/logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },

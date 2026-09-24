@@ -4,6 +4,7 @@ import { testConnection, closePool } from './config/database.js'
 import { closeRedis } from './config/redis.js'
 import { logger } from './config/logger.js'
 import { runPermissionAudit } from './utils/permission-audit.js'
+import { refreshRazorpayClient } from './config/razorpay.js'
 import { startCampaignScheduler, stopCampaignScheduler } from './workers/campaign-scheduler.worker.js'
 import { startPaymentExpiryWorker, stopPaymentExpiryWorker } from './workers/payment-expiry.worker.js'
 import {
@@ -27,6 +28,10 @@ const start = async () => {
   try {
     // Test database connection before starting
     await testConnection()
+
+    // Load the active Razorpay credentials (dashboard-managed, falls back
+    // to env vars) before anything that might touch payments can run.
+    await refreshRazorpayClient()
 
     // Build Fastify app
     const app = await buildApp()

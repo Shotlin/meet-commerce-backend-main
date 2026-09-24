@@ -1,9 +1,8 @@
 import crypto from 'node:crypto'
 import { getClient } from '../../config/database.js'
-import { env } from '../../config/env.js'
 import { orderQueue } from '../../config/bullmq.js'
 import { logger } from '../../config/logger.js'
-import { razorpay } from '../../config/razorpay.js'
+import { razorpay, getRazorpayKeyId, getRazorpayKeySecret } from '../../config/razorpay.js'
 import { getOffsetLimit, buildPagination } from '../../utils/paginate.js'
 import { OrdersRepository } from '../orders/orders.repository.js'
 import { PaymentSettingsService } from '../payment-settings/payment-settings.service.js'
@@ -169,7 +168,7 @@ export class WalletService {
         razorpayOrderId: razorpayOrder.id,
         amount: normalizedAmount,
         currency: 'INR',
-        keyId: env.RAZORPAY_KEY_ID,
+        keyId: getRazorpayKeyId(),
       },
     }
   }
@@ -210,7 +209,7 @@ export class WalletService {
       }
 
       const expectedSignature = crypto
-        .createHmac('sha256', env.RAZORPAY_KEY_SECRET)
+        .createHmac('sha256', getRazorpayKeySecret())
         .update(`${orderId}|${paymentId}`)
         .digest('hex')
 

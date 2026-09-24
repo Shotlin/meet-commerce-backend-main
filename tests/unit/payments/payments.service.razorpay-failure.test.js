@@ -13,6 +13,11 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 
 vi.mock('../../../src/config/razorpay.js', () => ({
   razorpay: { orders: { create: vi.fn() } },
+  getRazorpayKeyId: () => 'rzp_test_key',
+  getRazorpayKeySecret: () => 'test-key-secret',
+  getRazorpayWebhookSecret: () => undefined,
+  getRazorpayMode: () => 'TEST',
+  refreshRazorpayClient: vi.fn(),
 }))
 vi.mock('../../../src/config/env.js', () => ({
   env: { RAZORPAY_KEY_ID: 'rzp_test_key' },

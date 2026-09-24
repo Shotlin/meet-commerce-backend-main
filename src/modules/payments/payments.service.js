@@ -1,8 +1,7 @@
 import crypto from 'node:crypto'
 import RazorpaySdk from 'razorpay'
 import { logger } from '../../config/logger.js'
-import { env } from '../../config/env.js'
-import { razorpay } from '../../config/razorpay.js'
+import { razorpay, getRazorpayKeyId, getRazorpayKeySecret, getRazorpayWebhookSecret } from '../../config/razorpay.js'
 import { orderQueue } from '../../config/bullmq.js'
 import { getClient } from '../../config/database.js'
 import { getOffsetLimit, buildPagination } from '../../utils/paginate.js'
@@ -167,7 +166,7 @@ export class PaymentsService {
         razorpayOrderId: rzpOrder.id,
         amount: order.totalAmount,
         currency: 'INR',
-        keyId: env.RAZORPAY_KEY_ID,
+        keyId: getRazorpayKeyId(),
       },
     }
   }
@@ -195,7 +194,7 @@ export class PaymentsService {
     // secret. Both are real, required checks; neither substitutes for the
     // other.
     const expectedSignature = crypto
-      .createHmac('sha256', env.RAZORPAY_KEY_SECRET)
+      .createHmac('sha256', getRazorpayKeySecret())
       .update(`${razorpayOrderId}|${razorpayPaymentId}`)
       .digest('hex')
 
@@ -529,7 +528,7 @@ export class PaymentsService {
    * anything but a 2xx) is recorded but never reprocessed.
    */
   async handleWebhook(body, signature, rawBody, eventIdHeader = null) {
-    if (!env.RAZORPAY_WEBHOOK_SECRET) {
+    if (!getRazorpayWebhookSecret()) {
       logger.warn('Razorpay webhook secret not configured')
       return { success: false }
     }
@@ -548,7 +547,7 @@ export class PaymentsService {
       // class (razorpay/dist/razorpay.js), not an instance method — the
       // `razorpay` export from config/razorpay.js is `new Razorpay({...})`,
       // so it must be called on the class itself, imported separately here.
-      validSignature = RazorpaySdk.validateWebhookSignature(rawBodyString, signature, env.RAZORPAY_WEBHOOK_SECRET)
+      validSignature = RazorpaySdk.validateWebhookSignature(rawBodyString, signature, getRazorpayWebhookSecret())
     } catch (err) {
       // A malformed/absent signature header throws inside the HMAC compare
       // (mismatched buffer lengths) rather than returning false — that's

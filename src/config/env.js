@@ -30,6 +30,12 @@ const envSchema = z.object({
   JWT_ACCESS_EXPIRY: z.string().default('15m'),
   JWT_REFRESH_EXPIRY: z.string().default('7d'),
   COOKIE_SECRET: z.string().min(16).optional(),
+  // AES-256-GCM key for src/utils/encryption.js — currently only used to
+  // encrypt Razorpay key_secret/webhook_secret at rest (src/modules/
+  // razorpay-settings, migration 132). Optional at boot so the app still
+  // starts before an admin ever saves dashboard-managed credentials;
+  // encryption.js throws a clear error if used while unset.
+  SETTINGS_ENCRYPTION_KEY: z.string().min(32).optional(),
 
   // PostgreSQL
   DB_HOST: z.string().default('localhost'),

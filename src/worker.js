@@ -3,6 +3,7 @@ import { testConnection, closePool } from './config/database.js'
 import { redis, closeRedis } from './config/redis.js'
 import { logger } from './config/logger.js'
 import { startWorkerRuntime, closeWorkerRuntime } from './runtime/workers.js'
+import { refreshRazorpayClient } from './config/razorpay.js'
 
 const WORKER_HEARTBEAT_FILE =
   process.env.WORKER_HEARTBEAT_FILE || '/tmp/bakaloo-worker-heartbeat'
@@ -12,6 +13,7 @@ const start = async () => {
   try {
     await testConnection()
     await redis.ping()
+    await refreshRazorpayClient()
     await startWorkerRuntime()
     await fs.writeFile(WORKER_HEARTBEAT_FILE, new Date().toISOString())
 

@@ -45,6 +45,15 @@ const SENSITIVE_FIELDS = new Set([
   'password_hash',
   'force_password_change_token',
   'bank_account_number',
+  // Razorpay dashboard-managed credentials (migration 132) — see
+  // src/modules/razorpay-settings — must never reach the audit log even
+  // encrypted, since the audit row is a permanent, broader-access record.
+  'keySecret',
+  'webhookSecret',
+  'test_key_secret_encrypted',
+  'test_webhook_secret_encrypted',
+  'live_key_secret_encrypted',
+  'live_webhook_secret_encrypted',
 ])
 
 const INSERT_SQL = `

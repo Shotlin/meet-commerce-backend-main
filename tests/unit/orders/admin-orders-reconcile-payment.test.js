@@ -23,6 +23,11 @@ vi.mock('../../../src/modules/payments/payments.repository.js', () => ({
 const razorpayFetchMock = vi.fn()
 vi.mock('../../../src/config/razorpay.js', () => ({
   razorpay: { payments: { fetch: (...args) => razorpayFetchMock(...args) } },
+  getRazorpayKeyId: () => 'rzp_test_key',
+  getRazorpayKeySecret: () => 'secret',
+  getRazorpayWebhookSecret: () => undefined,
+  getRazorpayMode: () => 'TEST',
+  refreshRazorpayClient: vi.fn(),
 }))
 
 import { AdminOrdersService } from '../../../src/modules/admin/orders/orders.service.js'

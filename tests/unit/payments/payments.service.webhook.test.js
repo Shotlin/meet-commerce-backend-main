@@ -19,7 +19,14 @@ vi.mock('../../../src/config/logger.js', () => ({
 vi.mock('../../../src/config/bullmq.js', () => ({
   orderQueue: { add: vi.fn(async () => {}) },
 }))
-vi.mock('../../../src/config/razorpay.js', () => ({ razorpay: null }))
+vi.mock('../../../src/config/razorpay.js', () => ({
+  razorpay: null,
+  getRazorpayKeyId: () => 'rzp_test_key',
+  getRazorpayKeySecret: () => 'test-key-secret',
+  getRazorpayWebhookSecret: () => 'test-webhook-secret',
+  getRazorpayMode: () => 'TEST',
+  refreshRazorpayClient: vi.fn(),
+}))
 
 process.env.RAZORPAY_WEBHOOK_SECRET = 'test-webhook-secret'
 vi.mock('../../../src/config/env.js', () => ({

@@ -21,7 +21,14 @@ vi.mock('../../../src/config/logger.js', () => ({
 vi.mock('../../../src/config/bullmq.js', () => ({
   orderQueue: { add: vi.fn(async () => {}) },
 }))
-vi.mock('../../../src/config/razorpay.js', () => ({ razorpay: null }))
+vi.mock('../../../src/config/razorpay.js', () => ({
+  razorpay: null,
+  getRazorpayKeyId: () => undefined,
+  getRazorpayKeySecret: () => undefined,
+  getRazorpayWebhookSecret: () => undefined,
+  getRazorpayMode: () => null,
+  refreshRazorpayClient: vi.fn(),
+}))
 
 // Dynamic-import side effect modules used by the post-commit cascade —
 // stubbed so the cascade runs without touching real DB/queue code, while
