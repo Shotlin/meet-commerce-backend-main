@@ -4,7 +4,8 @@ This directory contains the production deployment assets for the Bakaloo backend
 
 ## Files
 
-- `bootstrap-ec2.sh`: hardens Ubuntu, installs Docker, enables UFW/fail2ban, and creates the required directories.
+- `routine-deploy.sh`: **the one to use for every normal deploy.** Run it on the EC2 server after pushing backend changes to GitHub — pulls `origin/main`, backs up the DB, builds, migrates, restarts, and verifies. See its own header comment for the exact usage and what it checks.
+- `bootstrap-ec2.sh`: hardens Ubuntu, installs Docker, enables UFW/fail2ban, and creates the required directories. One-time — the server is already bootstrapped.
 - `load-ssm-env.sh`: pulls secrets from AWS SSM Parameter Store and renders `app.env` and `infra.env`.
 - `deploy.sh`: builds the application image, starts PostgreSQL and Redis, runs migrations, and starts the full stack.
 - `restore-db.sh`: restores a PostgreSQL custom-format dump into the Dockerized production database and re-runs migrations.
