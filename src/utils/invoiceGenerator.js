@@ -79,6 +79,29 @@ function itemPackSize(item) {
 }
 
 /**
+ * `order_items`'s real relational columns are `product_name`/`unit_price`/
+ * `subtotal` (admin's `getOrderItems` returns these raw — customer-facing
+ * `findOrderById` formats them to camelCase, admin's does not, since the
+ * dashboard's own item display already reads the raw columns directly).
+ * Every field here falls back to the real snake_case name so a packing
+ * slip/invoice generated from either path renders the actual product/price
+ * instead of the generic "Product"/₹0 placeholder it silently fell through
+ * to before (found live on a real user's downloaded packing slip). Exported
+ * for direct unit testing — the previous version of this logic was only
+ * ever covered by "renders a valid PDF buffer" tests, which cannot catch a
+ * wrong rendered number, only a thrown exception.
+ */
+export function resolveItemDisplay(item) {
+  const name = item.name || item.productName || item.product_name || 'Product'
+  const packSize = itemPackSize(item)
+  const label = packSize ? `${name} (${packSize})` : name
+  const qty = item.quantity || item.qty || 0
+  const price = parseFloat(item.price ?? item.unit_price ?? 0)
+  const total = parseFloat(item.total ?? item.subtotal ?? qty * price)
+  return { label, qty, price, total }
+}
+
+/**
  * Right-aligned currency amount, drawn independently of the text cursor
  * (`lineBreak: false`) so it can share a row with a left-aligned fragment
  * drawn at the same y. Returns nothing — callers advance doc.y themselves.
@@ -98,8 +121,16 @@ function drawAmount(doc, amount, y, { size = 8, bold = false } = {}) {
 function drawStoreHeader(doc, title) {
   const logoWidth = 140
   try {
+    // Computed from the actual image's own pixel dimensions, not a
+    // hardcoded divisor tuned to one specific logo's aspect ratio — the
+    // previous `logoWidth / 2.71` was exactly that (759×280, the old
+    // Bakaloo logo's own ratio) and would have silently squashed/stretched
+    // any differently-shaped logo swapped in later, including this one
+    // (2172×724, a much wider wordmark).
+    const { width: nativeWidth, height: nativeHeight } = doc.openImage(STORE_INFO.logoPath)
+    const logoHeight = logoWidth * (nativeHeight / nativeWidth)
     doc.image(STORE_INFO.logoPath, (RECEIPT_WIDTH - logoWidth) / 2, doc.y, { width: logoWidth })
-    doc.y += logoWidth / 2.71 + 8
+    doc.y += logoHeight + 8
   } catch {
     // Missing/unreadable logo file must never break invoice generation.
     doc.fontSize(16).font('Helvetica-Bold').text(STORE_INFO.name, PAGE_LEFT, doc.y, { width: PAGE_WIDTH, align: 'center' })
@@ -228,12 +259,7 @@ function drawItemsTable(doc, items) {
   doc.moveDown(0.35)
 
   for (const item of items) {
-    const name = item.name || item.productName || 'Product'
-    const packSize = itemPackSize(item)
-    const label = packSize ? `${name} (${packSize})` : name
-    const qty = item.quantity || item.qty || 0
-    const price = parseFloat(item.price || 0)
-    const total = parseFloat(item.total ?? qty * price)
+    const { label, qty, price, total } = resolveItemDisplay(item)
 
     doc.font('Helvetica-Bold').fontSize(8.5)
     doc.text(label, PAGE_LEFT, doc.y, { width: PAGE_WIDTH })
@@ -256,14 +282,29 @@ function drawItemsTable(doc, items) {
   doc.moveDown(0.5)
 }
 
+/**
+ * `orders.total_amount` was renamed to `total_payable` by migration 106
+ * (§5 of CLAUDE.md) — this read never picked up the rename, so every
+ * invoice/packing slip's own "Total" line has always shown ₹0.00
+ * regardless of the order's real total (confirmed 11th instance of this
+ * exact drift across the codebase — found live on a real user's downloaded
+ * packing slip). Exported for direct unit testing, same reasoning as
+ * `resolveItemDisplay`.
+ */
+export function resolveOrderTotals(order) {
+  return {
+    subtotal: parseFloat(order.subtotal || 0),
+    discount: parseFloat(order.discount_amount || order.discountAmount || 0),
+    delivery: parseFloat(order.delivery_fee || order.deliveryFee || 0),
+    handling: parseFloat(order.handling_fee || order.handlingFee || 0),
+    tax: parseFloat(order.tax_amount || order.taxAmount || 0),
+    total: parseFloat(order.total_payable || order.totalAmount || order.total_amount || 0),
+    savings: parseFloat(order.savings_total || order.savingsTotal || 0),
+  }
+}
+
 function drawTotals(doc, order) {
-  const subtotal = parseFloat(order.subtotal || 0)
-  const discount = parseFloat(order.discount_amount || order.discountAmount || 0)
-  const delivery = parseFloat(order.delivery_fee || order.deliveryFee || 0)
-  const handling = parseFloat(order.handling_fee || order.handlingFee || 0)
-  const tax = parseFloat(order.tax_amount || order.taxAmount || 0)
-  const total = parseFloat(order.total_amount || order.totalAmount || 0)
-  const savings = parseFloat(order.savings_total || order.savingsTotal || 0)
+  const { subtotal, discount, delivery, handling, tax, total, savings } = resolveOrderTotals(order)
 
   const printLine = (label, value, bold = false) => {
     const y = doc.y
