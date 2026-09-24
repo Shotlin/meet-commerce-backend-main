@@ -257,6 +257,13 @@ export class OrdersRepository {
       price: Number(snapshot.price ?? row.unit_price ?? 0),
       quantity: Number(row.quantity ?? snapshot.quantity ?? 0),
       unit: snapshot.unit || null,
+      brand: snapshot.brand || null,
+      // Only present on orders placed after this field started being
+      // captured at checkout (see orders.service.js#placeOrder) — an older
+      // row's snapshot simply won't have it, and this stays `null`/`0`
+      // rather than inventing a discount that was never actually recorded.
+      originalPrice: snapshot.originalPrice != null ? Number(snapshot.originalPrice) : null,
+      discountPercent: snapshot.discountPercent ? Number(snapshot.discountPercent) : 0,
       total: Number(snapshot.total ?? row.subtotal ?? 0),
       thumbnailUrl: snapshot.thumbnailUrl || null,
     }

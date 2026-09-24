@@ -967,6 +967,7 @@ export class CartService {
           ? Number(sp.display_delivery_minutes)
           : null,
       shopName: sp.shop_name || null,
+      brand: sp.product_brand || null,
       name: sp.name,
       slug: sp.slug,
       price: listPrice,

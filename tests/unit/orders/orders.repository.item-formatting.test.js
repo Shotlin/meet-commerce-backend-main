@@ -55,6 +55,30 @@ const itemRowWithSnapshot = {
   },
 }
 
+const itemRowWithDiscountSnapshot = {
+  id: 'item-3',
+  order_id: 'order-1',
+  product_id: 'prod-3',
+  product_name: 'Chicken Breast (Boneless)',
+  quantity: 1,
+  unit_price: '260.00',
+  subtotal: '260.00',
+  shop_product_id: 'sp-3',
+  product_snapshot: {
+    productId: 'prod-3',
+    shopProductId: 'sp-3',
+    name: 'Chicken Breast (Boneless)',
+    price: 260,
+    quantity: 1,
+    unit: '500 g',
+    total: 260,
+    thumbnailUrl: 'https://cdn.example.com/chicken2.jpg',
+    brand: 'Fresh Cuts',
+    originalPrice: 320,
+    discountPercent: 18,
+  },
+}
+
 const itemRowWithoutSnapshot = {
   id: 'item-2',
   order_id: 'order-1',
@@ -89,6 +113,40 @@ describe('OrdersRepository.findOrderById item + total formatting', () => {
       total: 350,
       thumbnailUrl: 'https://cdn.example.com/chicken.jpg',
     })
+  })
+
+  it('surfaces brand/originalPrice/discountPercent when the checkout snapshot has them (the MRP strikethrough + % OFF badge on the Order Details screen)', async () => {
+    pooledQuery.mockReset()
+    pooledQuery
+      .mockResolvedValueOnce({ rows: [orderRow] })
+      .mockResolvedValueOnce({ rows: [itemRowWithDiscountSnapshot] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    const repo = new OrdersRepository()
+    const order = await repo.findOrderById('order-1')
+
+    expect(order.items[0]).toMatchObject({
+      brand: 'Fresh Cuts',
+      originalPrice: 320,
+      discountPercent: 18,
+    })
+  })
+
+  it('never fabricates a discount for an item snapshot that genuinely has none (older order, or a product with no sale price)', async () => {
+    pooledQuery.mockReset()
+    pooledQuery
+      .mockResolvedValueOnce({ rows: [orderRow] })
+      .mockResolvedValueOnce({ rows: [itemRowWithSnapshot] }) // no brand/originalPrice/discountPercent in its snapshot
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    const repo = new OrdersRepository()
+    const order = await repo.findOrderById('order-1')
+
+    expect(order.items[0].brand).toBeNull()
+    expect(order.items[0].originalPrice).toBeNull()
+    expect(order.items[0].discountPercent).toBe(0)
   })
 
   it('falls back to the relational columns when product_snapshot is empty (rows written before the snapshot existed), never the generic placeholder', async () => {

@@ -156,6 +156,15 @@ export class OrdersService {
         total: Number(line.lineTotal),
         thumbnailUrl: line.thumbnailUrl || null,
         pricingMode: priceMode,
+        brand: line.brand || null,
+        // Captured at checkout time, not re-derived later — a "was ₹X /
+        // Y% off" shown on a past order must reflect the discount that was
+        // actually true when the customer bought it, not today's price
+        // (which may have since changed). `originalPrice` is only ever set
+        // when the item genuinely had one (a real sale_price < list price
+        // at the moment of purchase) — never invented.
+        originalPrice: line.originalPrice != null ? Number(line.originalPrice) : null,
+        discountPercent: line.discountPercent ? Number(line.discountPercent) : 0,
       }))
       const subtotal = Number(items.reduce((sum, item) => sum + item.total, 0).toFixed(2))
       const deliveryFee = couponFreeDelivery ? 0 : (subtotal >= 499 ? 0 : 25)
