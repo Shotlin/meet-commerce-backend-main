@@ -324,6 +324,15 @@ export const buildApp = async () => {
     prefix: "/api/v1/app",
   });
 
+  // Support Settings (public) — brand name / support phone / support
+  // email, the single source of truth every mobile "Need Help"/"Contact
+  // Us" surface reads from. No auth — a guest can tap Need Help too.
+  const { publicSupportSettingsRoutes } =
+    await import("./modules/support-settings/support-settings.routes.js");
+  await app.register(publicSupportSettingsRoutes, {
+    prefix: "/api/v1/support-settings",
+  });
+
   // Shops — multi-vendor system
   await app.register(import("./modules/shops/shops.routes.js"), {
     prefix: "/api/v1/shops",
@@ -523,6 +532,13 @@ export const buildApp = async () => {
     await import("./modules/app-version/app-version.routes.js");
   await app.register(adminAppVersionRoutes, {
     prefix: "/api/v1/admin/app-versions",
+  });
+
+  // Support Settings (admin) — edit brand name / support phone / support email
+  const { adminSupportSettingsRoutes } =
+    await import("./modules/support-settings/support-settings.routes.js");
+  await app.register(adminSupportSettingsRoutes, {
+    prefix: "/api/v1/admin/support-settings",
   });
 
   // Delivery Calendar (admin) — weekly template + per-date overrides
