@@ -52,10 +52,20 @@ export class OrdersController {
     return reply.status(200).send({ success: true, data: order })
   }
 
+  // Self-service "my orders" — always the caller's own orders. The former
+  // `req.user?.platform_role === 'CUSTOMER'` gate was always false for a
+  // real customer JWT (customer tokens never carry a `platform_role`
+  // claim — see `plugins/auth.plugin.js`, which only ever computes that
+  // as a local variable, never writes it back onto `request.user`), so
+  // `customerId` always fell through to the client-supplied
+  // `req.query.customer_id` (or `null` — no filter at all). This route
+  // has no role/permission gate, so any authenticated caller could pass
+  // `?customer_id=<uuid>` to read another customer's full order history,
+  // or omit it entirely to receive every order in the database. Fixed to
+  // never trust anything from the request for whose orders these are.
   listOrders = async (req, reply) => {
     const params = {
-      customerId: req.user?.platform_role === 'CUSTOMER' ? (req.userId || req.user.id) : (req.query.customer_id || null),
-      warehouseId: req.warehouseId || req.query.warehouse_id || null,
+      customerId: req.userId || req.user.id,
       status: req.query.status || null,
     }
     const orders = await this.service.listOrders(params)

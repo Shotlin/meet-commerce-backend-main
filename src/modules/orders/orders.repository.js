@@ -219,7 +219,47 @@ export class OrdersRepository {
     const tasksRes = await query(`SELECT * FROM fulfilment_tasks WHERE order_id = $1 ORDER BY created_at ASC`, [orderId])
     const historyRes = await query(`SELECT * FROM order_status_history WHERE order_id = $1 ORDER BY changed_at ASC`, [orderId])
 
-    return { ...order, items: itemsRes.rows, fulfilment_tasks: tasksRes.rows, status_history: historyRes.rows }
+    return {
+      ...order,
+      // `orders.total_payable`/`orders.wallet_amount` are the real column
+      // names (migrations 106/127) — mirrored here under the camelCase keys
+      // every client (mobile `OrderModel`, `invoiceGenerator.js`) actually
+      // reads, without dropping the raw snake_case columns other callers of
+      // this method (transitionOrderStatus, createFulfilmentTask, getInvoice's
+      // customer_id ownership check) still rely on.
+      totalAmount: Number(order.total_payable || 0),
+      walletAmountUsed: Number(order.wallet_amount || 0),
+      items: itemsRes.rows.map((row) => this._formatOrderItem(row)),
+      fulfilment_tasks: tasksRes.rows,
+      status_history: historyRes.rows,
+    }
+  }
+
+  /**
+   * `order_items` rows carry the real relational columns (`product_name`,
+   * `unit_price`, `subtotal`) — none of which are named `name`/`price`/
+   * `total`/`unit`/`thumbnailUrl`, the shape every client that renders an
+   * order (mobile's `OrderItemModel`, `invoiceGenerator.js`) expects. The
+   * checkout-time item object (mobile `OrderItemModel`'s own camelCase
+   * shape) is preserved verbatim in `product_snapshot` (JSONB) on each row
+   * — prefer it, falling back to the relational columns for any row placed
+   * before `product_snapshot` was populated.
+   */
+  _formatOrderItem(row) {
+    const snapshot = (typeof row.product_snapshot === 'string'
+      ? JSON.parse(row.product_snapshot || '{}')
+      : row.product_snapshot) || {}
+    return {
+      id: row.id,
+      productId: row.product_id,
+      shopProductId: row.shop_product_id || snapshot.shopProductId || null,
+      name: snapshot.name || row.product_name || 'Item',
+      price: Number(snapshot.price ?? row.unit_price ?? 0),
+      quantity: Number(row.quantity ?? snapshot.quantity ?? 0),
+      unit: snapshot.unit || null,
+      total: Number(snapshot.total ?? row.subtotal ?? 0),
+      thumbnailUrl: snapshot.thumbnailUrl || null,
+    }
   }
 
   async findOrderByNumber(orderNumber) {
@@ -363,6 +403,30 @@ export class OrdersRepository {
       `SELECT * FROM orders WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC`,
       params
     )
-    return rows
+    if (rows.length === 0) return []
+
+    // Batch-fetch every row's items in one query (never N+1) and group by
+    // order — the "My Orders" list card (`order_card.dart`) reads
+    // `order.items.first.name/thumbnailUrl` and `order.total`, so this
+    // needs the same camelCase formatting `findOrderById` uses, not the
+    // raw `orders`/`order_items` columns.
+    const orderIds = rows.map((r) => r.id)
+    const { rows: itemRows } = await query(
+      `SELECT * FROM order_items WHERE order_id = ANY($1) ORDER BY created_at ASC`,
+      [orderIds]
+    )
+    const itemsByOrder = new Map()
+    for (const row of itemRows) {
+      const list = itemsByOrder.get(row.order_id) || []
+      list.push(this._formatOrderItem(row))
+      itemsByOrder.set(row.order_id, list)
+    }
+
+    return rows.map((order) => ({
+      ...order,
+      totalAmount: Number(order.total_payable || 0),
+      walletAmountUsed: Number(order.wallet_amount || 0),
+      items: itemsByOrder.get(order.id) || [],
+    }))
   }
 }

@@ -19,6 +19,11 @@ export class AdminOrdersController {
     return reply.send(success(data, 'Order stats by status'))
   }
 
+  async getSettlementSummary(request, reply) {
+    const data = await this.service.getSettlementSummary({ ...request.query, shopId: request.shopId ?? null })
+    return reply.send(success(data, 'Settlement summary'))
+  }
+
   async findById(request, reply) {
     try {
       const data = await this.service.findById(request.params.id, request.shopId ?? null)

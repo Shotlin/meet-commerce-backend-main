@@ -31,6 +31,32 @@ export const listOrdersSchema = {
 
 export const statsByStatusSchema = { tags: ['Admin Orders'], summary: 'Order counts by status (tab badges)' }
 
+// Same filterable fields as listOrdersSchema (minus page/limit — this is
+// an aggregate over the whole filtered set, not a page of it), so
+// "settlement summary for what I'm currently looking at" always matches
+// the list's own filters exactly.
+export const settlementSummarySchema = {
+  tags: ['Admin Orders'],
+  summary: 'Customer money settled — COD vs online vs wallet vs still pending, for the current filtered view',
+  querystring: {
+    type: 'object',
+    properties: {
+      status: { type: 'string' },
+      paymentMethod: { type: 'string' },
+      paymentStatus: { type: 'string' },
+      search: { type: 'string' },
+      startDate: { type: 'string', format: 'date-time' },
+      endDate: { type: 'string', format: 'date-time' },
+      deliveryType: { type: 'string', enum: ['express', 'scheduled', 'standard'] },
+      riderId: { type: 'string', format: 'uuid' },
+      minAmount: { type: 'number', minimum: 0 },
+      maxAmount: { type: 'number', minimum: 0 },
+      needsPaymentReview: { type: 'boolean' },
+      recoveredFromFailed: { type: 'boolean' },
+    },
+  },
+}
+
 export const orderDetailSchema = {
   tags: ['Admin Orders'],
   summary: 'Full order detail with items, timeline, payment, delivery',

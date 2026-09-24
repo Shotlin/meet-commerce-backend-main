@@ -9,6 +9,7 @@ import {
   refundOrderSchema, cancelOrderSchema, bulkStatusSchema,
   rescheduleOrderSchema, orderNotesListSchema, addOrderNoteSchema,
   reconcilePaymentSchema, bulkReconcilePaymentsSchema, razorpayDetailsSchema,
+  settlementSummarySchema,
 } from './orders.schema.js'
 
 /**
@@ -42,6 +43,11 @@ export default async function adminOrdersRoutes(fastify) {
 
   fastify.get('/', { schema: listOrdersSchema, preHandler: adminAuthShopScoped }, ctrl.findAll.bind(ctrl))
   fastify.get('/stats-by-status', { schema: statsByStatusSchema, preHandler: adminAuth }, ctrl.getStatsByStatus.bind(ctrl))
+  // Shop-scoped like the list itself (`adminAuthShopScoped`, not the bare
+  // `adminAuth` stats-by-status uses above) — "customer money settled"
+  // must respect the dashboard's selected branch, not silently answer for
+  // every shop when a shop-scoped user asks.
+  fastify.get('/settlement-summary', { schema: settlementSummarySchema, preHandler: adminAuthShopScoped }, ctrl.getSettlementSummary.bind(ctrl))
   fastify.get('/export', { schema: exportSchema, preHandler: adminAuth }, ctrl.exportCSV.bind(ctrl))
   fastify.post('/manual', { schema: manualOrderSchema, preHandler: adminAuth }, ctrl.createManualOrder.bind(ctrl))
   fastify.post('/bulk-assign', { schema: bulkAssignSchema, preHandler: adminAuthShopScoped }, ctrl.bulkAssign.bind(ctrl))

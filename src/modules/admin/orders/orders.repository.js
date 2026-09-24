@@ -1,15 +1,67 @@
 import { query, getClient } from '../../../config/database.js'
 
 export class AdminOrdersRepository {
-  async findAll({
-    offset, limit, status, paymentMethod, paymentStatus, search, startDate, endDate,
+  /**
+   * Shared WHERE-clause builder for `findAll` and `getSettlementSummary` —
+   * both need to answer "for exactly this filtered view" (same shop scope,
+   * date range, status, etc.), and per the same discipline `findAll`'s own
+   * count query already follows ("pagination totals are never computed
+   * against a different filter set than what's displayed"), a settlement
+   * total computed against a drifted copy of these filters would be a
+   * silent, hard-to-notice correctness bug — the exact category of bug
+   * this codebase has repeatedly hit elsewhere. `alias` lets the caller
+   * pick the FROM-table alias (`o`) since both queries use the same one.
+   */
+  _buildOrderFilters({
+    status, paymentMethod, paymentStatus, search, startDate, endDate,
     deliveryType, shopId, riderId, minAmount, maxAmount, needsPaymentReview, recoveredFromFailed,
   }) {
+    const params = []
+    let idx = 1
+    let clause = ''
+
+    // Shop scope — `shopId` is `request.shopId` as resolved by the shared
+    // `requireShopScope` middleware (shop-staff JWT, else HQ's optional
+    // X-Shop-Id header). `null` means "All Shops" for an HQ user; a
+    // shop-scoped staff JWT always carries a concrete value, so this branch
+    // is the ONLY thing that actually enforces per-branch order history —
+    // previously the dashboard's shop selector filtered nothing server-side.
+    if (shopId) { params.push(shopId); clause += ` AND o.shop_id = $${idx++}` }
+    if (status) { params.push(status); clause += ` AND o.status = $${idx++}` }
+    if (paymentMethod) { params.push(paymentMethod); clause += ` AND o.payment_method = $${idx++}` }
+    if (paymentStatus) { params.push(paymentStatus); clause += ` AND o.payment_status = $${idx++}` }
+    if (riderId) { params.push(riderId); clause += ` AND o.rider_id = $${idx++}` }
+    if (minAmount !== undefined && minAmount !== null) { params.push(minAmount); clause += ` AND o.total_payable >= $${idx++}` }
+    if (maxAmount !== undefined && maxAmount !== null) { params.push(maxAmount); clause += ` AND o.total_payable <= $${idx++}` }
+    if (needsPaymentReview) { clause += ` AND p.needs_manual_review = true` }
+    if (recoveredFromFailed) { clause += ` AND p.recovered_from_failed = true` }
+    if (startDate) { params.push(startDate); clause += ` AND o.created_at >= $${idx++}` }
+    if (endDate) { params.push(endDate); clause += ` AND o.created_at <= $${idx++}` }
+    if (search) {
+      params.push(`%${search}%`)
+      clause += ` AND (o.order_number ILIKE $${idx} OR u.phone ILIKE $${idx} OR u.name ILIKE $${idx})`
+      idx++
+    }
+    if (deliveryType === 'express') {
+      clause += ` AND o.delivery_mode = 'ASAP' AND o.quick_delivery_selected = true`
+    } else if (deliveryType === 'standard') {
+      clause += ` AND o.delivery_mode = 'ASAP' AND o.quick_delivery_selected = false`
+    } else if (deliveryType === 'scheduled') {
+      clause += ` AND o.delivery_mode = 'SCHEDULED'`
+    }
+
+    return { clause, params, nextIdx: idx }
+  }
+
+  async findAll({ offset, limit, ...filters }) {
     // LEFT JOIN payments on the most recent row per order — needed for the
     // paymentStatus/needsPaymentReview/recoveredFromFailed filters, which
     // live on `payments`, not `orders`. A LATERAL join picks exactly one
     // (the latest) payment row per order rather than fanning an order out
     // across every payment attempt it ever had.
+    const { clause, params, nextIdx } = this._buildOrderFilters(filters)
+    let idx = nextIdx
+
     let sql = `
       SELECT o.*, u.name AS customer_name, u.phone AS customer_phone,
              ru.name AS rider_name, sh.name AS shop_name,
@@ -32,40 +84,8 @@ export class AdminOrdersRepository {
         ORDER BY created_at DESC
         LIMIT 1
       ) p ON true
-      WHERE 1=1
+      WHERE 1=1 ${clause}
     `
-    const params = []
-    let idx = 1
-
-    // Shop scope — `shopId` is `request.shopId` as resolved by the shared
-    // `requireShopScope` middleware (shop-staff JWT, else HQ's optional
-    // X-Shop-Id header). `null` means "All Shops" for an HQ user; a
-    // shop-scoped staff JWT always carries a concrete value, so this branch
-    // is the ONLY thing that actually enforces per-branch order history —
-    // previously the dashboard's shop selector filtered nothing server-side.
-    if (shopId) { params.push(shopId); sql += ` AND o.shop_id = $${idx++}` }
-    if (status) { params.push(status); sql += ` AND o.status = $${idx++}` }
-    if (paymentMethod) { params.push(paymentMethod); sql += ` AND o.payment_method = $${idx++}` }
-    if (paymentStatus) { params.push(paymentStatus); sql += ` AND o.payment_status = $${idx++}` }
-    if (riderId) { params.push(riderId); sql += ` AND o.rider_id = $${idx++}` }
-    if (minAmount !== undefined && minAmount !== null) { params.push(minAmount); sql += ` AND o.total_payable >= $${idx++}` }
-    if (maxAmount !== undefined && maxAmount !== null) { params.push(maxAmount); sql += ` AND o.total_payable <= $${idx++}` }
-    if (needsPaymentReview) { sql += ` AND p.needs_manual_review = true` }
-    if (recoveredFromFailed) { sql += ` AND p.recovered_from_failed = true` }
-    if (startDate) { params.push(startDate); sql += ` AND o.created_at >= $${idx++}` }
-    if (endDate) { params.push(endDate); sql += ` AND o.created_at <= $${idx++}` }
-    if (search) {
-      params.push(`%${search}%`)
-      sql += ` AND (o.order_number ILIKE $${idx} OR u.phone ILIKE $${idx} OR u.name ILIKE $${idx})`
-      idx++
-    }
-    if (deliveryType === 'express') {
-      sql += ` AND o.delivery_mode = 'ASAP' AND o.quick_delivery_selected = true`
-    } else if (deliveryType === 'standard') {
-      sql += ` AND o.delivery_mode = 'ASAP' AND o.quick_delivery_selected = false`
-    } else if (deliveryType === 'scheduled') {
-      sql += ` AND o.delivery_mode = 'SCHEDULED'`
-    }
 
     // Count query mirrors the exact same WHERE clause and params as the
     // list query (same JOINs too — the payment-based filters need them)
@@ -81,8 +101,8 @@ export class AdminOrdersRepository {
         ORDER BY created_at DESC
         LIMIT 1
       ) p ON true
-      WHERE 1=1
-    ` + sql.split('WHERE 1=1')[1].replace(/ORDER BY.*$/, '').replace(/LIMIT.*$/, '')
+      WHERE 1=1 ${clause}
+    `
     const countRes = await query(countSql, params)
     const total = parseInt(countRes.rows[0].count)
 
@@ -91,6 +111,47 @@ export class AdminOrdersRepository {
 
     const { rows } = await query(sql, params)
     return { orders: rows, total }
+  }
+
+  /**
+   * Customer-money-settled summary for the exact same filtered view
+   * `findAll` shows (same shop scope, date range, status, etc. — via the
+   * shared `_buildOrderFilters`) — how much has genuinely been collected
+   * via Cash on Delivery vs. online (Razorpay), how much of that was
+   * covered by wallet balance rather than new money, and how much is
+   * still outstanding. `payment_status = 'PAID'` is the only thing that
+   * means money actually changed hands; a COD order sitting at `PENDING`
+   * has collected nothing yet, no matter how old it is.
+   */
+  async getSettlementSummary(filters) {
+    const { clause, params } = this._buildOrderFilters(filters)
+    const { rows } = await query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN o.payment_status = 'PAID' AND o.payment_method = 'COD' THEN o.total_payable - o.wallet_amount ELSE 0 END), 0) AS cod_collected,
+         COALESCE(SUM(CASE WHEN o.payment_status = 'PAID' AND o.payment_method != 'COD' THEN o.total_payable - o.wallet_amount ELSE 0 END), 0) AS online_collected,
+         COALESCE(SUM(CASE WHEN o.wallet_amount > 0 THEN o.wallet_amount ELSE 0 END), 0) AS wallet_collected,
+         COALESCE(SUM(CASE WHEN o.payment_status != 'PAID' THEN o.total_payable - o.wallet_amount ELSE 0 END), 0) AS pending_amount,
+         COUNT(*)::int AS order_count
+       FROM orders o
+       LEFT JOIN users u ON u.id = o.customer_id
+       LEFT JOIN LATERAL (
+         SELECT status, needs_manual_review, recovered_from_failed
+         FROM payments
+         WHERE payments.order_id = o.id
+         ORDER BY created_at DESC
+         LIMIT 1
+       ) p ON true
+       WHERE 1=1 ${clause}`,
+      params
+    )
+    const row = rows[0]
+    return {
+      codCollected: Number(row.cod_collected),
+      onlineCollected: Number(row.online_collected),
+      walletCollected: Number(row.wallet_collected),
+      pendingAmount: Number(row.pending_amount),
+      orderCount: row.order_count,
+    }
   }
 
   async getStatsByStatus() {

@@ -133,6 +133,10 @@ export class AdminOrdersService {
     return this.repository.getStatsByStatus()
   }
 
+  async getSettlementSummary(filters) {
+    return this.repository.getSettlementSummary(filters)
+  }
+
   /**
    * Fetch an order and, when the caller is scoped to a specific shop
    * (`requestShopId` — resolved by `requireShopScope()`: a shop-staff
