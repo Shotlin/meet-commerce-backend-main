@@ -176,6 +176,35 @@ export class ShopProductsController {
   }
 
   // ────────────────────────────────────────────────────────
+  // GET /:id/inventory-lots — Vendor batch breakdown backing this
+  // shop_product's stock (see ShopProductsService#getInventoryLots)
+  // ────────────────────────────────────────────────────────
+  async getInventoryLots(request, reply) {
+    if (!request.shopId) return this._missingShopReply(reply)
+
+    const paramsParsed = shopProductIdParamSchema.safeParse(request.params)
+    if (!paramsParsed.success) {
+      return reply
+        .code(400)
+        .send(error('Invalid shop product ID format', 'VALIDATION_ERROR'))
+    }
+
+    const result = await this.service.getInventoryLots(
+      request.shopId,
+      paramsParsed.data.id
+    )
+    if (!result) {
+      return reply
+        .code(404)
+        .send(error('Shop product not found', 'SHOP_PRODUCT_NOT_FOUND'))
+    }
+
+    return reply
+      .code(200)
+      .send(success(result, 'Inventory lots fetched'))
+  }
+
+  // ────────────────────────────────────────────────────────
   // PATCH /:id — Update non-stock fields
   // ────────────────────────────────────────────────────────
   async update(request, reply) {

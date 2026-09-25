@@ -19,6 +19,9 @@ import {
   getHistorySchema,
   getDocumentsSchema,
   uploadDocumentSchema,
+  postCollectionSchema,
+  collectionsSummarySchema,
+  collectionsListSchema,
 } from './delivery.schema.js'
 
 /**
@@ -126,4 +129,20 @@ export default async function deliveryRoutes(fastify) {
 
   // GET /store-info — Store location for map
   fastify.get('/store-info', controller.getStoreInfo.bind(controller))
+
+  // ─── COD collections (Big Phase 14) ───
+  // POST /orders/:id/collection — record the cash/UPI split
+  fastify.post('/orders/:id/collection', {
+    schema: postCollectionSchema,
+  }, controller.postCollection.bind(controller))
+
+  // GET /collections/summary — rider cash ledger roll-up
+  fastify.get('/collections/summary', {
+    schema: collectionsSummarySchema,
+  }, controller.getCollectionsSummary.bind(controller))
+
+  // GET /collections — per-order collection records
+  fastify.get('/collections', {
+    schema: collectionsListSchema,
+  }, controller.getCollections.bind(controller))
 }

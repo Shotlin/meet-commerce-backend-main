@@ -140,3 +140,44 @@ export const replaceStoreAssignmentsSchema = {
     },
   },
 }
+
+export const riderCollectionsSchema = {
+  params: {
+    type: 'object',
+    required: ['id'],
+    properties: { id: { type: 'string', pattern: uuidPattern } },
+  },
+}
+
+export const createSettlementSchema = {
+  params: {
+    type: 'object',
+    required: ['id'],
+    properties: { id: { type: 'string', pattern: uuidPattern } },
+  },
+  body: {
+    type: 'object',
+    required: ['amount'],
+    properties: {
+      amount: { type: 'number', minimum: 0.01 },
+      method: { type: 'string', enum: ['CASH', 'BANK_TRANSFER', 'UPI'], default: 'CASH' },
+      reference: { type: 'string', maxLength: 200 },
+    },
+  },
+}
+
+export const setBusinessUpiSchema = {
+  params: {
+    type: 'object',
+    required: ['id'],
+    properties: { id: { type: 'string', pattern: uuidPattern } },
+  },
+  body: {
+    type: 'object',
+    required: ['businessUpiId'],
+    properties: {
+      // Minimal UPI v2 shape check: name@bank (holder part free-form).
+      businessUpiId: { type: 'string', minLength: 3, maxLength: 100, pattern: '^[^@\\s]+@[^\\s]+$' },
+    },
+  },
+}

@@ -3,6 +3,7 @@ import {
   listRidersSchema, riderIdSchema, riderEarningsSchema,
   createPayoutSchema, toggleSuspendSchema, approveRiderSchema, updateCommissionSchema, verifyDocumentSchema,
   getStoreAssignmentsSchema, replaceStoreAssignmentsSchema,
+  riderCollectionsSchema, createSettlementSchema, setBusinessUpiSchema,
 } from './riders.schema.js'
 import { requirePermission } from '../../../middlewares/permission-check.js'
 
@@ -36,6 +37,12 @@ export default async function adminRiderRoutes(fastify) {
   // RIDER_STORE_SCOPING=true).
   fastify.get('/:id/assignments', { schema: getStoreAssignmentsSchema }, ctrl.getStoreAssignments)
   fastify.put('/:id/assignments', { schema: replaceStoreAssignmentsSchema }, ctrl.replaceStoreAssignments)
+
+  // Big Phase 14: COD cash ledger + settlement reconciliation
+  fastify.get('/:id/collections', { schema: riderCollectionsSchema }, ctrl.getCollections)
+  fastify.get('/:id/settlements', { schema: riderCollectionsSchema }, ctrl.getSettlements)
+  fastify.post('/:id/settlements', { schema: createSettlementSchema }, ctrl.createSettlement)
+  fastify.put('/:id/business-upi', { schema: setBusinessUpiSchema }, ctrl.setBusinessUpi)
 
   // Task 12.4: POST /api/v1/admin/riders/:riderId/approve — requires riders.approve
   fastify.post('/:id/approve', {

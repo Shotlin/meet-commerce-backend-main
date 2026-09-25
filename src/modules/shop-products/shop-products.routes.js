@@ -133,6 +133,27 @@ export default async function shopProductRoutes(fastify) {
     controller.getOne.bind(controller)
   )
 
+  // ── GET /:id/inventory-lots — Vendor batch breakdown ────
+  fastify.get(
+    '/:id/inventory-lots',
+    {
+      schema: {
+        tags: ['Shop Products'],
+        summary: 'List vendor inventory lots backing this shop product [Shop Staff+]',
+        security: [{ bearerAuth: [] }],
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
+      },
+      preHandler: readPreHandlers,
+    },
+    controller.getInventoryLots.bind(controller)
+  )
+
   // ── PATCH /:id — Update non-stock fields ────────────────
   fastify.patch(
     '/:id',

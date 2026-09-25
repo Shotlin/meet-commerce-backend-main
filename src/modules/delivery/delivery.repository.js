@@ -136,7 +136,7 @@ export class DeliveryRepository {
   async getAssignmentByOrderAndRider(orderId, riderId) {
     const { rows } = await query(
       `SELECT da.id as assignment_id, da.*, o.order_number, o.user_id as customer_id, o.status as order_status,
-              o.shop_id,
+              o.shop_id, o.total_amount, o.payment_method,
               ru.name as rider_name, ru.phone as rider_phone,
               rp.current_lat as rider_lat, rp.current_lng as rider_lng
        FROM delivery_assignments da
@@ -518,6 +518,16 @@ export class DeliveryRepository {
          WHERE o.id = $1`,
         [orderId]
       )
+      // ── AUTHORITATIVE RIDER EARNING SEMANTICS (blueprint Big Phase 15) ──
+      // The rider's earning is a FLAT per-delivery fee: the delivery_fee
+      // assigned to the offer at fanout time (resolveRiderEarning), plus
+      // tip. distance/performance bonuses are computed fields that
+      // default to 0 until ops configures incentives. `commission_rate`
+      // on rider_profiles is ADMIN-INFORMATIONAL (per-rider share
+      // reporting on the dashboard) and deliberately NOT part of this
+      // formula — a percentage and the flat fee must never both apply
+      // (blueprint §16). The UPDATE-then-INSERT on order_id below makes
+      // earning creation exact-once per order.
       const configuredDeliveryFee = Number(orderFeeRow?.delivery_fee || 0)
       const fallbackDeliveryFee = configuredDeliveryFee > 0
         ? configuredDeliveryFee
@@ -1009,6 +1019,171 @@ export class DeliveryRepository {
   }
 
   // ─── ORDER HISTORY (for rider) ──────────────────────
+
+  // ─── COD COLLECTIONS (Big Phase 14 — server-authoritative money) ────
+
+  /** The confirmed collection for an order, or null. */
+  async getCollectionByOrderId(orderId) {
+    const { rows } = await query(
+      `SELECT * FROM delivery_collections WHERE order_id = $1 LIMIT 1`,
+      [orderId]
+    )
+    return rows[0] || null
+  }
+
+
+  /**
+   * Persists the rider's cash/UPI collection for an order.
+   *
+   * Idempotency: the (order_id, idempotency_key) constraints make a
+   * duplicate posting impossible at the database level. A retry with
+   * the SAME key returns the existing row (replay); a DIFFERENT key for
+   * an already-collected order surfaces as `null` (caller → 409).
+   *
+   * Returns { row, replayed } or null when the order already carries a
+   * collection under a different key.
+   */
+  async saveCollection({ orderId, riderId, amountDue, cashAmount, upiAmount, idempotencyKey }) {
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const { rows: existing } = await client.query(
+        `SELECT * FROM delivery_collections WHERE order_id = $1 FOR UPDATE`,
+        [orderId]
+      )
+      if (existing.length > 0) {
+        await client.query('ROLLBACK')
+        const row = existing[0]
+        if (row.idempotency_key === idempotencyKey) {
+          return { row, replayed: true }
+        }
+        return null
+      }
+      const total = Number(cashAmount) + Number(upiAmount)
+      const { rows } = await client.query(
+        `INSERT INTO delivery_collections
+           (order_id, rider_id, amount_due, cash_amount, upi_amount,
+            total_collected, idempotency_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *`,
+        [orderId, riderId, amountDue, cashAmount, upiAmount, total, idempotencyKey]
+      )
+      await client.query('COMMIT')
+      return { row: rows[0], replayed: false }
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
+  }
+
+  /** Rider cash ledger summary: collected today, cash in hand
+   * (unsettled cash), UPI collected, already settled, pending handover. */
+  async getCollectionsSummary(riderId) {
+    const { rows: [totals] } = await query(
+      `SELECT
+         COALESCE(SUM(total_collected) FILTER (
+           WHERE collected_at >= date_trunc('day', NOW())
+         ), 0) AS collected_today,
+         COALESCE(SUM(cash_amount), 0) AS cash_total,
+         COALESCE(SUM(upi_amount), 0) AS upi_total,
+         COALESCE(SUM(cash_amount) FILTER (WHERE status = 'SETTLED'), 0) AS cash_settled,
+         COALESCE(SUM(cash_amount) FILTER (WHERE status = 'COLLECTED'), 0) AS cash_pending
+       FROM delivery_collections
+       WHERE rider_id = $1`,
+      [riderId]
+    )
+    const toNum = (v) => Number(v) || 0
+    return {
+      collectedToday: toNum(totals.collected_today),
+      cashCollectedTotal: toNum(totals.cash_total),
+      upiCollectedTotal: toNum(totals.upi_total),
+      cashSettled: toNum(totals.cash_settled),
+      cashInHand: toNum(totals.cash_pending),
+      pendingHandover: toNum(totals.cash_pending),
+    }
+  }
+
+  /** Per-order collection records, newest first. */
+  async getCollections(riderId, { limit, offset }) {
+    const { rows } = await query(
+      `SELECT dc.*, o.order_number, o.total_amount
+       FROM delivery_collections dc
+       JOIN orders o ON o.id = dc.order_id
+       WHERE dc.rider_id = $1
+       ORDER BY dc.collected_at DESC
+       LIMIT $2 OFFSET $3`,
+      [riderId, limit, offset]
+    )
+    return rows
+  }
+
+  /** Admin: a rider's collections (for the settlement workflow). */
+  async getCollectionsForAdmin(riderId) {
+    const { rows } = await query(
+      `SELECT dc.*, o.order_number
+       FROM delivery_collections dc
+       JOIN orders o ON o.id = dc.order_id
+       WHERE dc.rider_id = $1
+       ORDER BY dc.collected_at DESC
+       LIMIT 200`,
+      [riderId]
+    )
+    return rows
+  }
+
+  /** Admin: settlement history. */
+  async getSettlements(riderId) {
+    const { rows } = await query(
+      `SELECT * FROM rider_cash_settlements
+       WHERE rider_id = $1
+       ORDER BY created_at DESC
+       LIMIT 100`,
+      [riderId]
+    )
+    return rows
+  }
+
+  /**
+   * Records a settlement and flips the rider's COLLECTED cash rows to
+   * SETTLED in one transaction. Returns the settlement row.
+   */
+  async createSettlement({ riderId, amount, method, reference, settledBy }) {
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const { rows: [settlement] } = await client.query(
+        `INSERT INTO rider_cash_settlements (rider_id, amount, method, reference, status, settled_by)
+         VALUES ($1, $2, $3, $4, 'SETTLED', $5)
+         RETURNING *`,
+        [riderId, amount, method, reference, settledBy]
+      )
+      await client.query(
+        `UPDATE delivery_collections
+         SET status = 'SETTLED', updated_at = NOW()
+         WHERE rider_id = $1 AND status = 'COLLECTED' AND cash_amount > 0`,
+        [riderId]
+      )
+      await client.query('COMMIT')
+      return settlement
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
+  }
+
+  async setBusinessUpi(riderId, businessUpiId) {
+    const { rows } = await query(
+      `UPDATE rider_profiles SET business_upi_id = $1, updated_at = NOW()
+       WHERE user_id = $2
+       RETURNING user_id, business_upi_id`,
+      [businessUpiId, riderId]
+    )
+    return rows[0] || null
+  }
 
   async getDeliveryHistory(riderId, { limit, offset }) {
     const [orders, countResult] = await Promise.all([

@@ -783,6 +783,23 @@ export class VendorProcurementRepository {
     return reselected.rows[0].id
   }
 
+  /**
+   * Read-only counterpart to `ensureShopWarehouse` — looks up the shop's
+   * derived warehouse (by the same `SHOP-<id8>` code convention) without
+   * creating one. A shop that has never received any vendor stock has no
+   * warehouse row yet; callers should treat `null` as "no lots exist",
+   * not as an error. Used by shop-products' inventory-lots view so
+   * displaying a never-restocked product's lot breakdown doesn't write a
+   * throwaway warehouse row on every page view.
+   */
+  async findShopWarehouseId(shopId) {
+    const { rows } = await query(
+      `SELECT id FROM warehouses WHERE code = $1 LIMIT 1`,
+      [`SHOP-${shopId.slice(0, 8).toUpperCase()}`]
+    )
+    return rows[0]?.id ?? null
+  }
+
   async findReceiptBySupply(supplyOrderId) {
     const { rows } = await query(
       `SELECT * FROM procurement_receipts WHERE supply_order_id = $1 LIMIT 1`,

@@ -582,6 +582,22 @@ export class DeliveryService {
       }
     }
 
+    // Blueprint §14 (server-authoritative): a COD order cannot be
+    // delivered until its collection is confirmed server-side. The
+    // client's old cash/upi fields were schema-dropped — this check is
+    // the real gate.
+    const isCod = `${assignment.payment_method || ''}`.toUpperCase() === 'COD'
+    if (isCod) {
+      const collection = await this.repository.getCollectionByOrderId(orderId)
+      if (!collection) {
+        throw {
+          statusCode: 409,
+          message: 'Collect the COD payment before delivering',
+          code: 'COD_COLLECTION_REQUIRED',
+        }
+      }
+    }
+
     const cleanOtp = `${otp || ''}`.trim()
     const cleanProof = `${proofPhotoUrl || ''}`.trim()
     const allowDemoDelivery =
@@ -748,6 +764,74 @@ export class DeliveryService {
   async getDeliveryHistory(riderId, page = 1, limit = 20) {
     const offset = (page - 1) * limit
     return await this.repository.getDeliveryHistory(riderId, { limit, offset })
+  }
+
+  // ─── COD COLLECTION (Big Phase 14) ────────────────────
+
+  async saveCollection(riderId, orderId, { cashAmount, upiAmount, idempotencyKey }) {
+    const assignment = await this.repository.getAssignmentByOrderAndRider(orderId, riderId)
+    if (!assignment || assignment.status !== 'IN_TRANSIT') {
+      throw {
+        statusCode: 409,
+        message: 'Order must be in transit to record collection',
+        code: 'ORDER_NOT_IN_TRANSIT',
+      }
+    }
+    if (idempotencyKey && `${idempotencyKey}`.length > 100) {
+      throw {
+        statusCode: 400,
+        message: 'Invalid idempotency key',
+        code: 'VALIDATION_ERROR',
+      }
+    }
+
+    const amountDue = Number(assignment.total_amount ?? 0)
+    const cash = Number(cashAmount ?? 0)
+    const upi = Number(upiAmount ?? 0)
+    if (!Number.isFinite(cash) || cash < 0 || !Number.isFinite(upi) || upi < 0) {
+      throw {
+        statusCode: 400,
+        message: 'Cash and UPI amounts must be non-negative numbers',
+        code: 'VALIDATION_ERROR',
+      }
+    }
+    const total = cash + upi
+    // ₹2 tolerance — the same paise-rounding band the collect sheet
+    // enforces client-side (kept in sync by design).
+    if (Math.abs(total - amountDue) > 2) {
+      throw {
+        statusCode: 400,
+        message: `Collected ₹${total.toFixed(2)} does not match the ₹${amountDue.toFixed(2)} due`,
+        code: 'COLLECTION_AMOUNT_MISMATCH',
+      }
+    }
+
+    const result = await this.repository.saveCollection({
+      orderId,
+      riderId,
+      amountDue,
+      cashAmount: cash,
+      upiAmount: upi,
+      idempotencyKey: idempotencyKey || `collection-${orderId}`,
+    })
+    if (!result) {
+      throw {
+        statusCode: 409,
+        message: 'Collection already recorded for this order',
+        code: 'COLLECTION_ALREADY_RECORDED',
+      }
+    }
+    return { collection: result.row, replayed: result.replayed }
+  }
+
+  async getCollectionsSummary(riderId) {
+    return this.repository.getCollectionsSummary(riderId)
+  }
+
+  async getCollections(riderId, page = 1, limit = 20) {
+    const offset = (page - 1) * limit
+    const collections = await this.repository.getCollections(riderId, { limit, offset })
+    return { collections, page, limit }
   }
 
   // ─── INTERNAL HELPERS ───────────────────────────────

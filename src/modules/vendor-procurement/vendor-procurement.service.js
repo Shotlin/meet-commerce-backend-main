@@ -14,6 +14,8 @@ import { getClient } from '../../config/database.js'
 import { emit, emitInTx } from '../../utils/audit-log.js'
 import { InventoryService } from '../inventory/inventory.service.js'
 import { InventoryRepository } from '../inventory/inventory.repository.js'
+import { ShopProductsRepository } from '../shop-products/shop-products.repository.js'
+import { cacheDeletePattern } from '../../utils/cache.js'
 import { logger } from '../../config/logger.js'
 import { resolveEligibleVendors } from './vendor-eligibility.js'
 import { ProcurementNotifier } from './vendor-procurement.notifications.js'
@@ -1395,6 +1397,7 @@ export class VendorProcurementService {
       const inventoryResults = []
       if (receiptStatus === 'RECEIVED') {
         const inventoryService = new InventoryService(new InventoryRepository())
+        const shopProductsRepository = new ShopProductsRepository()
         let warehouseId = null
         try {
           warehouseId = payload.warehouse_id ?? (await this.repository.ensureShopWarehouse(supply.shop_id))
@@ -1419,6 +1422,36 @@ export class VendorProcurementService {
               resultEntry.inventory_skipped = false
               resultEntry.inventory_lot_id = lot.id
               await this.repository.linkReceiptItemToLot(receiptItems[i].id, lot.id)
+
+              // Sync the sellable shop_products.stock_quantity a customer
+              // actually buys against — this is the bridge that was missing:
+              // a vendor's accepted receipt used to update only inventory_lots
+              // (batch/FEFO tracking) while the customer-facing stock number
+              // stayed a separately, manually-typed value. Best-effort and
+              // scoped to its own try/catch so a sync failure never affects
+              // the inventory_lot just created above (that write already
+              // succeeded and must stand): a vendor's physical receipt is
+              // the source of truth (see this method's own doc comment).
+              try {
+                await this._syncShopProductStockFromReceipt(shopProductsRepository, {
+                  shopId: supply.shop_id,
+                  productId: line.product_id,
+                  quantity: line.accepted_quantity,
+                  actorId,
+                  supplyOrderId,
+                  supplyNumber: supply.supply_number,
+                  vendorId: supply.vendor_id ?? null,
+                  receiptItemId: receiptItems[i].id,
+                  inventoryLotId: lot.id,
+                }, resultEntry)
+              } catch (err) {
+                logger.error(
+                  { err, supplyOrderId, productId: line.product_id, shopId: supply.shop_id },
+                  'Shop-product stock sync failed for receipt line — inventory lot recorded, sellable stock unchanged'
+                )
+                resultEntry.shop_stock_linked = false
+                resultEntry.shop_stock_sync_failed = true
+              }
             } catch (err) {
               logger.error({ err, supplyOrderId, line: line.supply_order_item_id }, 'Inventory inbound failed for receipt line — variance preserved, retry later')
             }
@@ -1429,6 +1462,98 @@ export class VendorProcurementService {
 
       logger.info({ supplyOrderId, status: receiptStatus }, 'Supply receipt confirmed')
       return { receipt, supply_order: updated, inventory: inventoryResults }
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
+  }
+
+  /**
+   * Bridge a vendor's accepted receipt line into the sellable
+   * `shop_products.stock_quantity` for that exact shop + product, so
+   * "10 kg received" genuinely becomes "10 kg available to sell" without an
+   * admin re-typing the number by hand. Runs in its own short transaction
+   * (separate from receiveSupply's, which already committed by the time
+   * this is called — see that method's own post-commit inventory bridge).
+   *
+   * Deliberately does NOT auto-create a shop_products row: a product must
+   * already be added to this shop's catalog (with a real price) via the
+   * dashboard's "Add Product to Shop" flow before vendor stock can flow
+   * into it — that is a distinct, admin-owned pricing decision. When no
+   * matching shop_products row exists yet, this just marks the receipt
+   * line as not-yet-linked; the vendor batch itself is still fully
+   * recorded in inventory_lots and remains linkable later.
+   *
+   * @param {import('../shop-products/shop-products.repository.js').ShopProductsRepository} shopProductsRepository
+   * @param {{shopId:string, productId:string, quantity:number, actorId:string,
+   *   supplyOrderId:string, supplyNumber:string, vendorId:string|null,
+   *   receiptItemId:string, inventoryLotId:string}} ctx
+   * @param {object} resultEntry - mutated in place with shop_stock_* fields
+   */
+  async _syncShopProductStockFromReceipt(shopProductsRepository, ctx, resultEntry) {
+    const shopProduct = await shopProductsRepository.findByShopAndProduct(ctx.shopId, ctx.productId)
+    if (!shopProduct || shopProduct.deleted_at) {
+      resultEntry.shop_stock_linked = false
+      return
+    }
+
+    // `shop_products.stock_quantity` is a plain INTEGER (migration 031)
+    // while a vendor's received quantity (`inventory_lots.quantity_on_hand`)
+    // is NUMERIC(10,2) — fractional kg is a real, expected case here. Round
+    // to the nearest whole unit rather than truncate (truncating would
+    // always under-credit the shop, e.g. 2.9kg -> 2 instead of 3). A
+    // genuinely sub-1-unit receipt (e.g. 0.4kg) rounds to 0, which is not a
+    // valid non-zero stock_movements delta — skip the sync rather than
+    // force a fake delta; the vendor batch itself is still fully recorded
+    // in inventory_lots either way, so nothing is lost, only the sellable
+    // count doesn't move for a quantity too small for this integer column
+    // to represent. Converting stock_quantity itself to NUMERIC would be a
+    // platform-wide change (cart validation, purchase limits, the
+    // adjust-stock schema's own integer-only delta, mobile's int parsing)
+    // and is out of scope here — flagged separately, not silently patched.
+    const roundedQuantity = Math.round(Number(ctx.quantity))
+    if (roundedQuantity === 0) {
+      resultEntry.shop_stock_linked = false
+      resultEntry.shop_stock_skip_reason = 'QUANTITY_ROUNDS_TO_ZERO'
+      return
+    }
+
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const { stockProduct } = await shopProductsRepository.applyStockChange(client, {
+        shopProductId: shopProduct.id,
+        delta: roundedQuantity,
+        type: 'PROCUREMENT_RECEIPT',
+        reason: `Received from supply order ${ctx.supplyNumber}`,
+        actor: { userId: ctx.actorId, shopRole: null },
+        source: 'API',
+        metadata: {
+          supply_order_id: ctx.supplyOrderId,
+          supply_number: ctx.supplyNumber,
+          receipt_item_id: ctx.receiptItemId,
+          inventory_lot_id: ctx.inventoryLotId,
+          vendor_id: ctx.vendorId,
+          quantity_received: Number(ctx.quantity),
+        },
+        orderId: null,
+      })
+      await client.query('COMMIT')
+
+      resultEntry.shop_stock_linked = true
+      resultEntry.shop_product_id = shopProduct.id
+      resultEntry.shop_stock_quantity_after = stockProduct.stock_quantity
+
+      // Mirrors ShopProductsService#invalidateShopCache (kept inline here
+      // rather than instantiating the whole service for one cache clear).
+      await Promise.all([
+        cacheDeletePattern(`bakaloo:shop-products:v1:${ctx.shopId}:*`),
+        cacheDeletePattern('products:*'),
+        cacheDeletePattern('bakaloo:tab_home:*'),
+        cacheDeletePattern('bakaloo:sections:public:*'),
+      ])
     } catch (err) {
       await client.query('ROLLBACK')
       throw err

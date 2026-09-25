@@ -13,6 +13,8 @@ import {
   emitInTx as emitAuditInTx,
 } from '../../utils/audit-log.js'
 import { ERROR_CODES } from '../../constants/errors.js'
+import { VendorProcurementRepository } from '../vendor-procurement/vendor-procurement.repository.js'
+import { InventoryRepository } from '../inventory/inventory.repository.js'
 
 /**
  * Shop Products service — business logic with Redis caching and
@@ -590,6 +592,43 @@ export class ShopProductsService {
    */
   async getById(shopId, id) {
     return this.repo.findById(id, shopId)
+  }
+
+  /**
+   * List the vendor-supplied inventory lots backing one shop_product's
+   * sellable stock — "which vendor batches make up this number" — plus the
+   * lot-quantity sum, so the dashboard's Edit Shop Pricing & Stock modal can
+   * show real batch provenance instead of treating stock_quantity as an
+   * independent, manually-typed value whenever procurement inventory
+   * actually exists for it.
+   *
+   * Read-only: never creates a warehouse row (see
+   * VendorProcurementRepository#findShopWarehouseId), so viewing a product
+   * that has never been vendor-restocked just returns an empty list.
+   *
+   * @param {string} shopId
+   * @param {string} shopProductId
+   * @returns {Promise<{shopProduct:object, lots:object[], lotQuantityTotal:number}|null>}
+   *   null when the shop_product doesn't exist / isn't in this shop's scope.
+   */
+  async getInventoryLots(shopId, shopProductId) {
+    const shopProduct = await this.repo.findById(shopProductId, shopId)
+    if (!shopProduct) return null
+
+    const vendorProcurementRepo = new VendorProcurementRepository()
+    const warehouseId = await vendorProcurementRepo.findShopWarehouseId(shopId)
+    if (!warehouseId) {
+      return { shopProduct, lots: [], lotQuantityTotal: 0 }
+    }
+
+    const inventoryRepo = new InventoryRepository()
+    const lots = await inventoryRepo.listLots(warehouseId, shopProduct.product_id)
+    const lotQuantityTotal = lots.reduce(
+      (sum, lot) => sum + Number(lot.quantity_on_hand ?? 0),
+      0
+    )
+
+    return { shopProduct, lots, lotQuantityTotal }
   }
 
   /**

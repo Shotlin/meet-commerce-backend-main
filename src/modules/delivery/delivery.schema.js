@@ -230,3 +230,40 @@ export const uploadDocumentSchema = {
   summary: 'Upload rider document',
   consumes: ['multipart/form-data'],
 }
+
+export const postCollectionSchema = {
+  tags: ['Delivery'],
+  summary: 'Record the COD cash/UPI collection for an order (idempotent)',
+  params: {
+    type: 'object',
+    required: ['id'],
+    properties: { id: { type: 'string', format: 'uuid' } },
+  },
+  body: {
+    type: 'object',
+    required: ['cashAmount', 'upiAmount'],
+    properties: {
+      cashAmount: { type: 'number', minimum: 0 },
+      upiAmount: { type: 'number', minimum: 0 },
+      idempotencyKey: { type: 'string', maxLength: 100 },
+    },
+  },
+}
+
+export const collectionsSummarySchema = {
+  tags: ['Delivery'],
+  summary: 'Rider cash ledger roll-up (Big Phase 14)',
+  querystring: { type: 'object', properties: {} },
+}
+
+export const collectionsListSchema = {
+  tags: ['Delivery'],
+  summary: 'Per-order collection records',
+  querystring: {
+    type: 'object',
+    properties: {
+      page: { type: 'integer', minimum: 1, default: 1 },
+      limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+    },
+  },
+}

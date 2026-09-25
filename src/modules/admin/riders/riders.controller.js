@@ -127,6 +127,44 @@ export class AdminRidersController {
     return success(data, 'Live locations fetched')
   }
 
+  // ─── COD COLLECTIONS (Big Phase 14) ───
+
+  async getCollections(request, reply) {
+    const data = await svc.getCollections(request.params.id)
+    if (data === null) return error('Rider not found', 404)
+    return success(data, 'Rider collections fetched')
+  }
+
+  async getSettlements(request, reply) {
+    const data = await svc.getSettlements(request.params.id)
+    if (data === null) return error('Rider not found', 404)
+    return success(data, 'Settlements fetched')
+  }
+
+  async createSettlement(request, reply) {
+    const { amount, method, reference } = request.body
+    const settlement = await svc.createSettlement(
+      request.params.id,
+      { amount, method, reference },
+      request.user.id,
+      request.ip
+    )
+    if (settlement === null) return error('Rider not found', 404)
+    return success(settlement, 'Settlement recorded')
+  }
+
+  async setBusinessUpi(request, reply) {
+    const { businessUpiId } = request.body
+    const profile = await svc.setBusinessUpi(
+      request.params.id,
+      businessUpiId,
+      request.user.id,
+      request.ip
+    )
+    if (profile === null) return error('Rider profile not found', 404)
+    return success(profile, 'Business UPI updated')
+  }
+
   // ─── STORE ASSIGNMENTS (Big Phase 6) ───
 
   async getStoreAssignments(request, reply) {

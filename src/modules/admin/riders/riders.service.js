@@ -111,6 +111,67 @@ export class AdminRidersService {
     return repo.getLiveLocations()
   }
 
+  // ─── COD COLLECTIONS (Big Phase 14) ───
+
+  async getCollections(riderId) {
+    if (!(await repo.riderExists(riderId))) return null
+    return repo.getCollectionsForAdmin(riderId)
+  }
+
+  async getSettlements(riderId) {
+    if (!(await repo.riderExists(riderId))) return null
+    return repo.getSettlements(riderId)
+  }
+
+  /**
+   * Records a cash settlement and flips the rider's collected cash rows
+   * to SETTLED in the same transaction. Returns null when the rider
+   * does not exist.
+   */
+  async createSettlement(riderId, { amount, method, reference }, adminId, ip) {
+    if (!(await repo.riderExists(riderId))) return null
+    const numeric = Number(amount)
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      throw Object.assign(new Error('Settlement amount must be a positive number'), {
+        statusCode: 400,
+        code: 'VALIDATION_ERROR',
+      })
+    }
+    const settlement = await repo.createSettlement({
+      riderId,
+      amount: numeric,
+      method: method || 'CASH',
+      reference: reference || null,
+      settledBy: adminId,
+    })
+    logAdminActivity(
+      adminId,
+      'SETTLE_RIDER_CASH',
+      'rider',
+      riderId,
+      null,
+      { amount: numeric, method: settlement.method },
+      ip
+    )
+    return settlement
+  }
+
+  /** Sets the business UPI id the rider's collect-sheet QR is built from. */
+  async setBusinessUpi(riderId, businessUpiId, adminId, ip) {
+    const profile = await repo.setBusinessUpi(riderId, businessUpiId)
+    if (!profile) return null
+    logAdminActivity(
+      adminId,
+      'UPDATE_BUSINESS_UPI',
+      'rider',
+      riderId,
+      null,
+      { businessUpiId },
+      ip
+    )
+    return profile
+  }
+
   // ─── STORE ASSIGNMENTS (Big Phase 6) ───
 
   async getStoreAssignments(riderId) {

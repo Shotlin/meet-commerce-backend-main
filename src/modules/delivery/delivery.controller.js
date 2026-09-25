@@ -241,4 +241,40 @@ export class DeliveryController {
     const info = await this.service.getStoreInfo()
     return reply.code(200).send(success(info, 'Store info fetched'))
   }
+
+  /**
+   * POST /orders/:id/collection — record the COD cash/UPI split
+   * (Big Phase 14: server-authoritative, idempotent).
+   */
+  async postCollection(request, reply) {
+    const { cashAmount, upiAmount, idempotencyKey } = request.body
+    const result = await this.service.saveCollection(
+      request.user.id,
+      request.params.id,
+      { cashAmount, upiAmount, idempotencyKey }
+    )
+    return reply.code(result.replayed ? 200 : 201).send(
+      success(result.collection, result.replayed
+        ? 'Collection already recorded'
+        : 'Collection recorded')
+    )
+  }
+
+  /**
+   * GET /collections/summary — the rider cash ledger roll-up.
+   */
+  async getCollectionsSummary(request, reply) {
+    const summary = await this.service.getCollectionsSummary(request.user.id)
+    return reply.code(200).send(success(summary, 'Collection summary fetched'))
+  }
+
+  /**
+   * GET /collections — per-order collection records.
+   */
+  async getCollections(request, reply) {
+    const page = Number(request.query.page) || 1
+    const limit = Number(request.query.limit) || 20
+    const data = await this.service.getCollections(request.user.id, page, limit)
+    return reply.code(200).send(success(data, 'Collections fetched'))
+  }
 }

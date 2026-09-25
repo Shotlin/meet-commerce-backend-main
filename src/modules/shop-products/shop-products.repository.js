@@ -4,7 +4,12 @@ import { logger } from '../../config/logger.js'
 
 /**
  * Stock_Movement_Type vocabulary — must stay in sync with the
- * `chk_stock_movements_type` CHECK constraint in migration 042.
+ * `chk_stock_movements_type` CHECK constraint in migrations 042 and 141.
+ *
+ * PROCUREMENT_RECEIPT (141) is written only by
+ * vendor-procurement.service.js#receiveSupply when an accepted receipt line
+ * has a matching shop_products row — never via the dashboard adjust-stock
+ * endpoint, which stays restricted to the three operator-driven values.
  *
  * @see Requirements R23.2, R23.4
  */
@@ -14,6 +19,7 @@ export const STOCK_MOVEMENT_TYPES = Object.freeze({
   CANCELLATION_RESTORE: 'CANCELLATION_RESTORE',
   DAMAGED_STOCK: 'DAMAGED_STOCK',
   RETURN_STOCK: 'RETURN_STOCK',
+  PROCUREMENT_RECEIPT: 'PROCUREMENT_RECEIPT',
 })
 
 const ALLOWED_STOCK_MOVEMENT_TYPES = new Set(Object.values(STOCK_MOVEMENT_TYPES))
@@ -571,8 +577,8 @@ export class ShopProductsRepository {
    *
    * Validation:
    *   - `type` must be one of MANUAL_ADJUSTMENT, ORDER_DEDUCTION,
-   *     CANCELLATION_RESTORE, DAMAGED_STOCK, RETURN_STOCK
-   *     (chk_stock_movements_type, migration 042).
+   *     CANCELLATION_RESTORE, DAMAGED_STOCK, RETURN_STOCK, PROCUREMENT_RECEIPT
+   *     (chk_stock_movements_type, migrations 042 and 141).
    *   - `source` must be one of DASHBOARD, ORDER, JOB, API
    *     (chk_stock_movements_source, migration 042).
    *   - `delta` must be a finite, non-zero integer.
