@@ -139,3 +139,65 @@ describe('DeliveryService toggleOnline eligibility gates', () => {
     expect(service._queueBacklogAssignScan).toHaveBeenCalledWith('RIDER_WENT_ONLINE')
   })
 })
+
+describe('DeliveryService.acceptOrder — rider-busy conflict mapping', () => {
+  let repository
+  let service
+
+  beforeEach(() => {
+    repository = createRepositoryMock()
+    service = createService(repository)
+  })
+
+  it('maps RIDER_ALREADY_HAS_ACTIVE_ORDER to a typed 409 with rider-facing copy', async () => {
+    repository.getAssignmentByOrderAndRider.mockResolvedValue({
+      assignment_id: 'assign-1',
+      status: 'ASSIGNED',
+    })
+    repository.acceptOrder.mockResolvedValue({
+      conflict: true,
+      reason: 'RIDER_ALREADY_HAS_ACTIVE_ORDER',
+    })
+
+    await expect(service.acceptOrder('rider-1', 'order-1')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'RIDER_ALREADY_HAS_ACTIVE_ORDER',
+      message: 'You already have an active delivery. Complete it first',
+    })
+  })
+
+  it('emits order:expired to every losing rider after a winning accept', async () => {
+    repository.getAssignmentByOrderAndRider.mockResolvedValue({
+      assignment_id: 'assign-winner',
+      status: 'ASSIGNED',
+      order_number: 'ORD-1',
+      order_status: 'CONFIRMED',
+      customer_id: 'customer-1',
+    })
+    repository.acceptOrder.mockResolvedValue({
+      conflict: false,
+      assignment: { id: 'assign-winner', status: 'ACCEPTED' },
+      cancelledOffers: [
+        { id: 'assign-loser-1', rider_id: 'rider-loser-1' },
+        { id: 'assign-loser-2', rider_id: 'rider-loser-2' },
+      ],
+    })
+    repository.storeDeliveryOtp.mockResolvedValue(undefined)
+
+    await service.acceptOrder('rider-1', 'order-1')
+
+    expect(service._emitOrderExpired).toHaveBeenCalledTimes(2)
+    expect(service._emitOrderExpired).toHaveBeenCalledWith('order-1', 'rider-loser-1', {
+      orderId: 'order-1',
+      assignmentId: 'assign-loser-1',
+      status: 'EXPIRED',
+      message: 'Accepted by another rider',
+    })
+    expect(service._emitOrderExpired).toHaveBeenCalledWith('order-1', 'rider-loser-2', {
+      orderId: 'order-1',
+      assignmentId: 'assign-loser-2',
+      status: 'EXPIRED',
+      message: 'Accepted by another rider',
+    })
+  })
+})

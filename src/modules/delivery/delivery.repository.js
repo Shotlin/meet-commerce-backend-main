@@ -3,6 +3,7 @@ import { redis } from '../../config/redis.js'
 import { logger } from '../../config/logger.js'
 import {
   ASSIGNABLE_ORDER_STATUSES,
+  CLAIMED_ASSIGNMENT_STATUSES,
   OPEN_ASSIGNMENT_STATUSES,
 } from '../../constants/delivery-statuses.js'
 
@@ -195,6 +196,25 @@ export class DeliveryRepository {
       if (order.rider_id && order.rider_id !== riderId) {
         await client.query('ROLLBACK')
         return { conflict: true, reason: 'ORDER_ALREADY_CLAIMED' }
+      }
+
+      // Blueprint §10 (server-authoritative one-active-order): dispatch
+      // keeps busy riders out of the offer pool, but a stale UI or a
+      // duplicate event can still POST an accept for a second order.
+      // Enforce the rule inside the same locked transaction.
+      const { rows: busyRows } = await client.query(
+        `SELECT 1
+         FROM delivery_assignments
+         WHERE rider_id = $1
+           AND id <> $2
+           AND order_id <> $3
+           AND status = ANY($4::text[])
+         LIMIT 1`,
+        [riderId, assignmentId, orderId, CLAIMED_ASSIGNMENT_STATUSES]
+      )
+      if (busyRows.length > 0) {
+        await client.query('ROLLBACK')
+        return { conflict: true, reason: 'RIDER_ALREADY_HAS_ACTIVE_ORDER' }
       }
 
       const { rows: [assignment] } = await client.query(

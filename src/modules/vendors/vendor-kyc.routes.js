@@ -11,6 +11,7 @@ import { VendorKycService } from './vendor-kyc.service.js'
 import { VendorKycController } from './vendor-kyc.controller.js'
 import { SubmitKycSchema, ReviewKycSchema } from './vendor-kyc.schema.js'
 import { requireVendorScope } from '../../middlewares/vendor-scope.js'
+import { requirePermission } from '../../middlewares/permission-check.js'
 
 export async function vendorKycRoutes(fastify) {
   const vendorRepository = new VendorsRepository()
@@ -19,10 +20,17 @@ export async function vendorKycRoutes(fastify) {
   const controller = new VendorKycController(service)
 
   // 1. Submit KYC documents (Vendor scope)
+  // submitKyc/getOnboardingStatus use middlewares/permission-check.js's
+  // requirePermission, not the fastify.requirePermission decorator — see
+  // the identical note in vendors.routes.js. reviewKyc is deliberately
+  // left on the fastify decorator: it's admin/compliance-only (no
+  // requireVendorScope at all) and only ever called with a real
+  // platform_role-bearing JWT, for which the decorator's recomputation
+  // is correct.
   fastify.post('/:vendorId/kyc', {
     preHandler: [
       fastify.authenticate,
-      fastify.requirePermission('vendors.update'),
+      requirePermission('vendors.update'),
       requireVendorScope(),
     ],
     schema: { body: SubmitKycSchema },
@@ -43,7 +51,7 @@ export async function vendorKycRoutes(fastify) {
   fastify.get('/:vendorId/kyc/status', {
     preHandler: [
       fastify.authenticate,
-      fastify.requirePermission('vendor_documents.view'),
+      requirePermission('vendor_documents.view'),
       requireVendorScope(),
     ],
     handler: controller.getOnboardingStatus,

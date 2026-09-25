@@ -192,6 +192,15 @@ export class DeliveryService {
           code: 'ORDER_ALREADY_CLAIMED',
         }
       }
+      if (result.reason === 'RIDER_ALREADY_HAS_ACTIVE_ORDER') {
+        // Rider-facing copy: the OffersController surfaces this message
+        // verbatim after removing the stale offer (error contract §20).
+        throw {
+          statusCode: 409,
+          message: 'You already have an active delivery. Complete it first',
+          code: 'RIDER_ALREADY_HAS_ACTIVE_ORDER',
+        }
+      }
       throw {
         statusCode: 409,
         message: result.reason === 'ORDER_NOT_AVAILABLE'

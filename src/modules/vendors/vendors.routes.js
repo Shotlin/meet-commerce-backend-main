@@ -17,6 +17,7 @@ import {
   VendorQuerySchema,
 } from './vendors.schema.js'
 import { requireVendorScope } from '../../middlewares/vendor-scope.js'
+import { requirePermission } from '../../middlewares/permission-check.js'
 
 export async function vendorRoutes(fastify) {
   const repository = new VendorsRepository()
@@ -38,10 +39,25 @@ export async function vendorRoutes(fastify) {
   })
 
   // 3. Get vendor by ID
+  // NOTE: getById/update/updateProfile/updateSettings use
+  // middlewares/permission-check.js#requirePermission, NOT
+  // fastify.requirePermission — the fastify decorator (auth.plugin.js)
+  // recomputes the effective permission set from
+  // ROLE_PERMISSIONS[request.user.platform_role || request.user.role],
+  // which for a vendor-scoped JWT resolves to the base 'CUSTOMER' role
+  // (vendors have no platform_role, and `role` is the underlying users
+  // row's role, not their vendor role) — it silently ignores the real
+  // `vendorRoles`/`permissions` claims the login flow puts on the JWT
+  // specifically for vendor use. Found live: every vendor self-service
+  // call 403'd with "requires 'vendors.view' permission" despite the
+  // JWT genuinely carrying it. `middlewares/permission-check.js`'s
+  // variant correctly reads `user.permissions` directly for a non-HQ
+  // caller (computeEffectivePermissions) — the same fix already applied
+  // to modules/vendor-procurement's vendor-facing routes.
   fastify.get('/:vendorId', {
     preHandler: [
       fastify.authenticate,
-      fastify.requirePermission('vendors.view'),
+      requirePermission('vendors.view'),
       requireVendorScope(),
     ],
     handler: controller.getById,
@@ -51,7 +67,7 @@ export async function vendorRoutes(fastify) {
   fastify.patch('/:vendorId', {
     preHandler: [
       fastify.authenticate,
-      fastify.requirePermission('vendors.update'),
+      requirePermission('vendors.update'),
       requireVendorScope(),
     ],
     schema: { body: UpdateVendorSchema },
@@ -59,6 +75,15 @@ export async function vendorRoutes(fastify) {
   })
 
   // 5. Update vendor status (Activate / Suspend / Verify)
+  // Deliberately LEFT on fastify.requirePermission (unlike 3/4/7/8 above)
+  // — see the spawned task on VENDOR_OWNER's role permissions before ever
+  // switching this one. VENDOR_OWNER's real ROLE_PERMISSIONS set already
+  // includes 'vendors.suspend', so swapping this to the correct
+  // JWT-reading middleware without first fixing that role definition (or
+  // adding requireVendorScope here) would let any vendor suspend/delete
+  // any OTHER vendor by ID — right now that's accidentally blocked only
+  // because this route's permission check doesn't read the JWT's real
+  // permissions at all.
   fastify.patch('/:vendorId/status', {
     preHandler: [
       fastify.authenticate,
@@ -68,7 +93,7 @@ export async function vendorRoutes(fastify) {
     handler: controller.updateStatus,
   })
 
-  // 6. Soft delete vendor
+  // 6. Soft delete vendor — same deliberate exception as #5 above.
   fastify.delete('/:vendorId', {
     preHandler: [
       fastify.authenticate,
@@ -81,7 +106,7 @@ export async function vendorRoutes(fastify) {
   fastify.patch('/:vendorId/profile', {
     preHandler: [
       fastify.authenticate,
-      fastify.requirePermission('vendors.update'),
+      requirePermission('vendors.update'),
       requireVendorScope(),
     ],
     schema: { body: UpdateVendorProfileSchema },
@@ -92,7 +117,7 @@ export async function vendorRoutes(fastify) {
   fastify.patch('/:vendorId/settings', {
     preHandler: [
       fastify.authenticate,
-      fastify.requirePermission('vendors.update'),
+      requirePermission('vendors.update'),
       requireVendorScope(),
     ],
     schema: { body: UpdateVendorSettingsSchema },

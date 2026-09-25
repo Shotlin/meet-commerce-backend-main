@@ -7,6 +7,7 @@ vi.mock('../../../src/config/logger.js', () => ({
 import {
   evaluateLocationFreshness,
   logStaleLocationSkips,
+  applyPoolCap,
 } from '../../../src/workers/dispatch-eligibility.js'
 import { logger } from '../../../src/config/logger.js'
 
@@ -105,5 +106,31 @@ describe('logStaleLocationSkips', () => {
       total: 9,
       orderId: 'o1',
     })
+  })
+})
+
+describe('applyPoolCap (architecture §9 configurable nearest pool)', () => {
+  const pool = Array.from({ length: 5 }, (_, i) => ({ riderId: `r-${i}`, distanceKm: i }))
+
+  it('truncates to the configured pool size, keeping the nearest', () => {
+    const capped = applyPoolCap(pool, 2)
+    expect(capped).toHaveLength(2)
+    expect(capped.map((c) => c.riderId)).toEqual(['r-0', 'r-1'])
+    // input untouched
+    expect(pool).toHaveLength(5)
+  })
+
+  it('returns the same array untouched when under the cap', () => {
+    expect(applyPoolCap(pool, 10)).toBe(pool)
+  })
+
+  it('treats a non-positive cap as unlimited', () => {
+    expect(applyPoolCap(pool, 0)).toBe(pool)
+    expect(applyPoolCap(pool, -3)).toBe(pool)
+    expect(applyPoolCap(pool, Number.NaN)).toBe(pool)
+  })
+
+  it('returns an empty array for non-array input', () => {
+    expect(applyPoolCap(null, 5)).toEqual([])
   })
 })
