@@ -1,4 +1,8 @@
 import { logger } from '../config/logger.js'
+import {
+  OPEN_ASSIGNMENT_STATUSES,
+  sqlInList,
+} from '../constants/delivery-statuses.js'
 
 // A rider is dispatch-eligible only while their last known GPS fix is
 // fresh enough (blueprint §5: "location fix is fresh enough for
@@ -59,4 +63,71 @@ export function logStaleLocationSkips({ skipped, total, orderId, source }) {
     { skipped, total, orderId, source, staleMinutes: RIDER_LOCATION_STALE_MINUTES },
     'Auto-assign: candidates skipped for stale or missing location'
   )
+}
+
+/**
+ * Builds the dispatch candidate SQL for the auto-assign worker.
+ *
+ * Baseline eligibility (Task 12.2): approved + online + active user +
+ * no open assignment. Big Phase 6 additions live here:
+ * - `location_updated_at` is selected for the freshness gate.
+ * - when `storeScoping` is true, the rider must hold an active
+ *   assignment for the order's pickup shop.
+ *
+ * @param {object} input
+ * @param {boolean} input.storeScoping
+ * @param {string|null} input.shopId  order pickup shop id (required
+ *   when storeScoping is true).
+ * @returns {{ sql: string, params: any[] }}
+ */
+export function buildCandidateQuery({ storeScoping, shopId }) {
+  const params = []
+  let sql = `SELECT rp.user_id, rp.current_lat, rp.current_lng, rp.updated_at,
+            rp.location_updated_at
+     FROM rider_profiles rp
+     JOIN users u ON u.id = rp.user_id
+     WHERE rp.is_approved = true
+       AND rp.is_online = true
+       AND u.is_active = true
+       AND NOT EXISTS (
+         SELECT 1 FROM delivery_assignments da
+         WHERE da.rider_id = rp.user_id
+           AND da.status IN (${sqlInList(OPEN_ASSIGNMENT_STATUSES)})
+       )`
+  if (storeScoping) {
+    if (!shopId) {
+      throw new Error('storeScoping requires the order shop id')
+    }
+    params.push(shopId)
+    sql += `
+       AND EXISTS (
+         SELECT 1 FROM rider_store_assignments rsa
+         WHERE rsa.rider_id = rp.user_id
+           AND rsa.shop_id = $1
+           AND rsa.is_active = true
+       )`
+  }
+  sql += `
+     ORDER BY rp.updated_at ASC NULLS LAST
+     LIMIT 10000`
+  return { sql, params }
+}
+
+// Architecture §9: a sensible default architecture offers the order to
+// a configured pool of the nearest eligible riders instead of fanning
+// out to every online rider in range. `0` (or any non-positive value)
+// disables the cap and restores uncapped fanout.
+export const AUTO_ASSIGN_POOL_SIZE =
+  Number(process.env.AUTO_ASSIGN_POOL_SIZE) || 10
+
+/**
+ * Pure pool cap: nearest-first candidates in, at most `poolSize` out.
+ * A non-positive/invalid cap means unlimited. The input array is not
+ * mutated; when no truncation happens the same array is returned.
+ */
+export function applyPoolCap(candidates, poolSize = AUTO_ASSIGN_POOL_SIZE) {
+  if (!Array.isArray(candidates)) return []
+  if (!Number.isFinite(poolSize) || poolSize <= 0) return candidates
+  if (candidates.length <= poolSize) return candidates
+  return candidates.slice(0, poolSize)
 }

@@ -1,10 +1,12 @@
 import { query, getClient } from '../../config/database.js'
 import { redis } from '../../config/redis.js'
 import { logger } from '../../config/logger.js'
+import {
+  ASSIGNABLE_ORDER_STATUSES,
+  OPEN_ASSIGNMENT_STATUSES,
+} from '../../constants/delivery-statuses.js'
 
 const RIDER_LOCATION_PREFIX = 'rider:location:'
-const ASSIGNABLE_ORDER_STATUSES = ['CONFIRMED', 'PREPARING', 'PACKED']
-const OPEN_ASSIGNMENT_STATUSES = ['ASSIGNED', 'ACCEPTED', 'PICKED_UP', 'IN_TRANSIT']
 
 /**
  * Delivery repository — database access for delivery operations

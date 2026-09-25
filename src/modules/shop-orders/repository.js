@@ -1,4 +1,5 @@
 import { query, getClient, pool } from '../../config/database.js'
+import { OPEN_ASSIGNMENT_STATUSES, sqlInList } from '../../constants/delivery-statuses.js'
 
 /**
  * Shop Orders repository — wraps the existing `orders` table with
@@ -432,7 +433,7 @@ export class ShopOrdersRepository {
               cancelled_at = NOW(),
               updated_at = NOW()
         WHERE order_id = $1
-          AND status IN ('ASSIGNED', 'ACCEPTED', 'PICKED_UP', 'IN_TRANSIT')`,
+          AND status IN (${sqlInList(OPEN_ASSIGNMENT_STATUSES)})`,
       [orderId]
     )
   }
@@ -517,7 +518,7 @@ export class ShopOrdersRepository {
          FROM delivery_assignments da
          JOIN orders o ON o.id = da.order_id
         WHERE o.shop_id = $1
-          AND da.status IN ('ASSIGNED', 'ACCEPTED', 'PICKED_UP', 'IN_TRANSIT')`,
+          AND da.status IN (${sqlInList(OPEN_ASSIGNMENT_STATUSES)})`,
       [shopId]
     )
     const total = countResult.rows[0]?.total ?? 0
@@ -532,7 +533,7 @@ export class ShopOrdersRepository {
          JOIN orders o ON o.id = da.order_id
          JOIN users  u ON u.id = da.rider_id
         WHERE o.shop_id = $1
-          AND da.status IN ('ASSIGNED', 'ACCEPTED', 'PICKED_UP', 'IN_TRANSIT')
+          AND da.status IN (${sqlInList(OPEN_ASSIGNMENT_STATUSES)})
         GROUP BY u.id, u.name, u.phone
         ORDER BY last_assigned_at DESC NULLS LAST
         LIMIT $2 OFFSET $3`,

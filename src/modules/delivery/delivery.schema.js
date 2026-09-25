@@ -6,7 +6,7 @@ export const getAssignedOrdersSchema = {
     properties: {
       status: {
         type: 'string',
-        enum: ['ASSIGNED', 'ACCEPTED', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED'],
+        enum: ['ASSIGNED', 'ACCEPTED', 'PICKED_UP', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED'],
       },
     },
   },

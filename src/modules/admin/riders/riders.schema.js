@@ -111,3 +111,32 @@ export const verifyDocumentSchema = {
     },
   },
 }
+
+export const getStoreAssignmentsSchema = {
+  params: {
+    type: 'object',
+    required: ['id'],
+    properties: { id: { type: 'string', pattern: uuidPattern } },
+  },
+}
+
+export const replaceStoreAssignmentsSchema = {
+  params: {
+    type: 'object',
+    required: ['id'],
+    properties: { id: { type: 'string', pattern: uuidPattern } },
+  },
+  body: {
+    type: 'object',
+    required: ['shopIds'],
+    properties: {
+      // Sending an empty list deactivates every assignment for the
+      // rider (the rider becomes store-eligible nowhere).
+      shopIds: {
+        type: 'array',
+        items: { type: 'string', pattern: uuidPattern },
+        maxItems: 100,
+      },
+    },
+  },
+}

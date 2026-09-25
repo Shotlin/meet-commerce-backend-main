@@ -11,7 +11,14 @@ import { emit as emitAudit } from '../utils/audit-log.js'
 import {
   evaluateLocationFreshness,
   logStaleLocationSkips,
+  buildCandidateQuery,
+  applyPoolCap,
 } from './dispatch-eligibility.js'
+import {
+  ASSIGNABLE_ORDER_STATUSES,
+  CLAIMED_ASSIGNMENT_STATUSES,
+  OPEN_ASSIGNMENT_STATUSES,
+} from '../constants/delivery-statuses.js'
 
 const DEFAULT_RIDER_EARNING = 25
 // Auto-assign fans out to every online rider sorted by distance with no
@@ -21,9 +28,7 @@ const DEFAULT_RIDER_EARNING = 25
 // matches even when the closest candidate is absurdly far away.
 const MAX_AUTO_ASSIGN_DISTANCE_KM =
   Number(process.env.AUTO_ASSIGN_MAX_DISTANCE_KM) || 15
-const ASSIGNABLE_ORDER_STATUSES = ['CONFIRMED', 'PREPARING', 'PACKED']
-const CLAIMED_ASSIGNMENT_STATUSES = ['ACCEPTED', 'PICKED_UP', 'IN_TRANSIT']
-const OPEN_ASSIGNMENT_STATUSES = ['ASSIGNED', ...CLAIMED_ASSIGNMENT_STATUSES]
+
 const RIDER_DECLINE_REASONS = new Set([
   'TOO_FAR',
   'VEHICLE_ISSUE',
@@ -531,23 +536,14 @@ async function handleAutoAssign({ orderId, source = 'SYSTEM' }) {
     return { assigned: false, reason: 'SHOP_COORDS_MISSING' }
   }
 
-  // Task 12.2: Select riders with status AVAILABLE, is_active=true, no non-terminal assignment
-  const { rows: candidateRiders } = await query(
-    `SELECT rp.user_id, rp.current_lat, rp.current_lng, rp.updated_at,
-            rp.location_updated_at
-     FROM rider_profiles rp
-     JOIN users u ON u.id = rp.user_id
-     WHERE rp.is_approved = true
-       AND rp.is_online = true
-       AND u.is_active = true
-       AND NOT EXISTS (
-         SELECT 1 FROM delivery_assignments da
-         WHERE da.rider_id = rp.user_id
-           AND da.status IN ('ASSIGNED', 'ACCEPTED', 'IN_TRANSIT')
-       )
-     ORDER BY rp.updated_at ASC NULLS LAST
-     LIMIT 10000`
-  )
+  // Task 12.2: Select riders with status AVAILABLE, is_active=true, no non-terminal assignment.
+  // Big Phase 6: when RIDER_STORE_SCOPING=true, riders must also hold an
+  // active assignment for the order's pickup shop (rider_store_assignments).
+  const { sql: candidateSql, params: candidateParams } = buildCandidateQuery({
+    storeScoping: process.env.RIDER_STORE_SCOPING === 'true',
+    shopId: order.shop_id,
+  })
+  const { rows: candidateRiders } = await query(candidateSql, candidateParams)
 
   if (!candidateRiders.length) {
     return { assigned: false, reason: 'NO_AVAILABLE_RIDERS' }
@@ -642,7 +638,22 @@ async function handleAutoAssign({ orderId, source = 'SYSTEM' }) {
     return aDistance - bDistance
   })
 
-  const selectedCandidates = inRangeCandidates
+  // Architecture §9: only the nearest configured pool receives the
+  // offer; everyone else stays untouched. Push/socket fanout below
+  // iterates the same truncated list.
+  const selectedCandidates = applyPoolCap(inRangeCandidates)
+  if (selectedCandidates.length < inRangeCandidates.length) {
+    logger.info(
+      {
+        orderId,
+        shopId: order.shop_id,
+        inRange: inRangeCandidates.length,
+        offered: selectedCandidates.length,
+        poolSize: selectedCandidates.length,
+      },
+      'Auto-assign fanout capped to the configured nearest pool'
+    )
+  }
 
   if (!selectedCandidates.length) {
     return { assigned: false, reason: 'NO_AVAILABLE_RIDERS' }

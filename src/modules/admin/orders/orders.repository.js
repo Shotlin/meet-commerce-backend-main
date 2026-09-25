@@ -1,4 +1,5 @@
 import { query, getClient } from '../../../config/database.js'
+import { OPEN_ASSIGNMENT_STATUSES, sqlInList } from '../../../constants/delivery-statuses.js'
 
 export class AdminOrdersRepository {
   /**
@@ -351,7 +352,7 @@ export class AdminOrdersRepository {
                updated_at = NOW()
            WHERE order_id = $2
              AND status = ANY($3::text[])`,
-          [newStatus, orderId, ['ASSIGNED', 'ACCEPTED', 'PICKED_UP', 'IN_TRANSIT']]
+          [newStatus, orderId, OPEN_ASSIGNMENT_STATUSES]
         )
       }
 
@@ -401,7 +402,7 @@ export class AdminOrdersRepository {
              cancelled_at = NOW(),
              updated_at = NOW()
          WHERE order_id = $1
-           AND status IN ('ASSIGNED', 'ACCEPTED', 'PICKED_UP', 'IN_TRANSIT')`,
+           AND status IN (${sqlInList(OPEN_ASSIGNMENT_STATUSES)})`,
         [orderId]
       )
 
@@ -443,7 +444,7 @@ export class AdminOrdersRepository {
                cancelled_at = NOW(),
                updated_at = NOW()
            WHERE order_id = $1
-             AND status IN ('ASSIGNED', 'ACCEPTED', 'PICKED_UP', 'IN_TRANSIT')`,
+             AND status IN (${sqlInList(OPEN_ASSIGNMENT_STATUSES)})`,
           [orderId]
         )
 

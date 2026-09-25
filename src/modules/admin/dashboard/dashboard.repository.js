@@ -1,4 +1,5 @@
 import { query } from '../../../config/database.js'
+import { CLAIMED_ASSIGNMENT_STATUSES, sqlInList } from '../../../constants/delivery-statuses.js'
 import { redis } from '../../../config/redis.js'
 
 export class DashboardRepository {
@@ -435,7 +436,7 @@ export class DashboardRepository {
       query(
         `SELECT COUNT(DISTINCT rider_id)::int AS on_delivery
          FROM delivery_assignments
-         WHERE status IN ('ACCEPTED', 'PICKED_UP', 'IN_TRANSIT')`
+         WHERE status IN (${sqlInList(CLAIMED_ASSIGNMENT_STATUSES)})`
       ),
     ])
     const t = totals.rows[0]

@@ -153,6 +153,7 @@ describe('Task 23.5 — Rider auto-assignment uses shop coordinates', () => {
             current_lat: 12.98,
             current_lng: 77.60,
             last_active_at: new Date().toISOString(),
+            location_updated_at: new Date().toISOString(),
           }],
         })
         // 4. FCM tokens for push notification
@@ -210,12 +211,14 @@ describe('Task 23.5 — Rider auto-assignment uses shop coordinates', () => {
         current_lat: 12.951,
         current_lng: 77.571,
         last_active_at: new Date().toISOString(),
+        location_updated_at: new Date().toISOString(),
       }
       const farRider = {
         user_id: 'rider-far',
         current_lat: 13.10,
         current_lng: 77.80,
         last_active_at: new Date().toISOString(),
+        location_updated_at: new Date().toISOString(),
       }
 
       mockQuery
@@ -267,6 +270,7 @@ describe('Task 23.5 — Rider auto-assignment uses shop coordinates', () => {
         current_lat: 21.1959, // Mota Varachha, Surat, Gujarat
         current_lng: 72.8302,
         last_active_at: new Date().toISOString(),
+        location_updated_at: new Date().toISOString(),
       }
 
       mockQuery

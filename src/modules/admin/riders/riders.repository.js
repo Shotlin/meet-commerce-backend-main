@@ -1,4 +1,5 @@
 import { query, getClient } from '../../../config/database.js'
+import { OPEN_ASSIGNMENT_STATUSES, sqlInList } from '../../../constants/delivery-statuses.js'
 
 export class AdminRidersRepository {
   async findAll({ offset, limit, search, status, sortBy = 'created_at', sortOrder = 'DESC' }) {
@@ -25,7 +26,12 @@ export class AdminRidersRepository {
       `SELECT u.id, u.name, u.phone, u.avatar_url, u.is_active,
               rp.vehicle_type, rp.vehicle_number, rp.is_approved, rp.is_online,
               rp.rating, rp.total_deliveries, rp.commission_rate,
-              rp.current_lat, rp.current_lng, u.created_at
+              rp.current_lat, rp.current_lng, u.created_at,
+              EXISTS (
+                SELECT 1 FROM delivery_assignments da
+                WHERE da.rider_id = u.id
+                  AND da.status IN (${sqlInList(OPEN_ASSIGNMENT_STATUSES)})
+              ) AS is_busy
        FROM users u
        LEFT JOIN rider_profiles rp ON rp.user_id = u.id
        WHERE ${where}
@@ -45,7 +51,12 @@ export class AdminRidersRepository {
       `SELECT u.*, rp.vehicle_type, rp.vehicle_number, rp.license_url, rp.aadhar_url,
               rp.is_approved, rp.is_online, rp.rating, rp.total_deliveries,
               rp.commission_rate, rp.bank_account_number, rp.bank_ifsc, rp.bank_name,
-              rp.current_lat, rp.current_lng
+              rp.current_lat, rp.current_lng,
+              EXISTS (
+                SELECT 1 FROM delivery_assignments da
+                WHERE da.rider_id = u.id
+                  AND da.status IN (${sqlInList(OPEN_ASSIGNMENT_STATUSES)})
+              ) AS is_busy
        FROM users u
        LEFT JOIN rider_profiles rp ON rp.user_id = u.id
        WHERE u.id = $1 AND u.role = 'RIDER'`,
@@ -197,10 +208,71 @@ export class AdminRidersRepository {
        FROM users u
        JOIN rider_profiles rp ON rp.user_id = u.id
        LEFT JOIN delivery_assignments da ON da.rider_id = u.id
-         AND da.status IN ('ASSIGNED', 'ACCEPTED', 'PICKED_UP', 'IN_TRANSIT')
+         AND da.status IN (${sqlInList(OPEN_ASSIGNMENT_STATUSES)})
        WHERE rp.is_online = true AND u.is_active = true
        ORDER BY u.name`
     )
     return rows
+  }
+
+  // ─── STORE ASSIGNMENTS + BUSY STATE (Big Phase 6) ───
+
+  async riderExists(riderId) {
+    const { rows } = await query(
+      `SELECT 1 FROM users WHERE id = $1 AND role = 'RIDER' LIMIT 1`,
+      [riderId]
+    )
+    return rows.length > 0
+  }
+
+  async getStoreAssignments(riderId) {
+    const { rows } = await query(
+      `SELECT rsa.id, rsa.rider_id, rsa.shop_id, rsa.is_active,
+              rsa.created_at, rsa.updated_at,
+              s.name AS shop_name, s.address AS shop_address
+       FROM rider_store_assignments rsa
+       JOIN shops s ON s.id = rsa.shop_id
+       WHERE rsa.rider_id = $1
+       ORDER BY rsa.is_active DESC, s.name`,
+      [riderId]
+    )
+    return rows
+  }
+
+  /**
+   * Replaces a rider's active store set in one transaction: shops in
+   * [shopIds] are activated (rows upserted), every other existing row is
+   * soft-deactivated so assignment history is preserved. Idempotent —
+   * sending the same set twice leaves the same state.
+   */
+  async replaceStoreAssignments(riderId, shopIds) {
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const { rows: deactivated } = await client.query(
+        `UPDATE rider_store_assignments
+         SET is_active = false, updated_at = NOW()
+         WHERE rider_id = $1 AND is_active = true
+           AND NOT (shop_id = ANY($2::uuid[]))
+         RETURNING shop_id`,
+        [riderId, shopIds]
+      )
+      const { rows: activated } = await client.query(
+        `INSERT INTO rider_store_assignments (rider_id, shop_id, is_active)
+         SELECT $1, shop_id, true
+         FROM unnest($2::uuid[]) AS shop_id
+         ON CONFLICT (rider_id, shop_id)
+         DO UPDATE SET is_active = true, updated_at = NOW()
+         RETURNING shop_id, is_active`,
+        [riderId, shopIds]
+      )
+      await client.query('COMMIT')
+      return { activated: activated.length, deactivated: deactivated.length }
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
   }
 }

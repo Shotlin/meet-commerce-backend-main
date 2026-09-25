@@ -111,6 +111,41 @@ export class AdminRidersService {
     return repo.getLiveLocations()
   }
 
+  // ─── STORE ASSIGNMENTS (Big Phase 6) ───
+
+  async getStoreAssignments(riderId) {
+    if (!(await repo.riderExists(riderId))) return null
+    return repo.getStoreAssignments(riderId)
+  }
+
+  /**
+   * Replaces a rider's active store set. Returns null when the rider
+   * does not exist, { conflict } when a shop id is unknown (FK 23503),
+   * otherwise the change summary. Unknown shop ids fail the whole
+   * request — a partial assignment set is never persisted.
+   */
+  async replaceStoreAssignments(riderId, shopIds, adminId, ip) {
+    if (!(await repo.riderExists(riderId))) return null
+    try {
+      const result = await repo.replaceStoreAssignments(riderId, shopIds)
+      logAdminActivity(
+        adminId,
+        'UPDATE_RIDER_STORE_ASSIGNMENTS',
+        'rider',
+        riderId,
+        null,
+        { shopIds, ...result },
+        ip
+      )
+      return result
+    } catch (err) {
+      if (err && err.code === '23503') {
+        return { conflict: true }
+      }
+      throw err
+    }
+  }
+
   async _queueBacklogAssignScan(source) {
     try {
       await orderQueue.add(

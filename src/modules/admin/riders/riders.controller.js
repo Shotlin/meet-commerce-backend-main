@@ -126,4 +126,22 @@ export class AdminRidersController {
     const data = await svc.getLiveLocations()
     return success(data, 'Live locations fetched')
   }
+
+  // ─── STORE ASSIGNMENTS (Big Phase 6) ───
+
+  async getStoreAssignments(request, reply) {
+    const data = await svc.getStoreAssignments(request.params.id)
+    if (data === null) return error('Rider not found', 404)
+    return success(data, 'Store assignments fetched')
+  }
+
+  async replaceStoreAssignments(request, reply) {
+    const { shopIds } = request.body
+    const result = await svc.replaceStoreAssignments(
+      request.params.id, shopIds, request.user.id, request.ip
+    )
+    if (result === null) return error('Rider not found', 404)
+    if (result.conflict) return error('One or more shop ids do not exist', 400)
+    return success(result, 'Store assignments updated')
+  }
 }

@@ -2,6 +2,7 @@ import { AdminRidersController } from './riders.controller.js'
 import {
   listRidersSchema, riderIdSchema, riderEarningsSchema,
   createPayoutSchema, toggleSuspendSchema, approveRiderSchema, updateCommissionSchema, verifyDocumentSchema,
+  getStoreAssignmentsSchema, replaceStoreAssignmentsSchema,
 } from './riders.schema.js'
 import { requirePermission } from '../../../middlewares/permission-check.js'
 
@@ -29,6 +30,12 @@ export default async function adminRiderRoutes(fastify) {
   fastify.put('/:id/commission', { schema: updateCommissionSchema }, ctrl.updateCommission)
   fastify.get('/:id/documents', { schema: riderIdSchema }, ctrl.getDocuments)
   fastify.put('/:id/documents/:documentId/verify', { schema: verifyDocumentSchema }, ctrl.verifyDocument)
+
+  // Big Phase 6: store eligibility — admins mark which FreshCuts
+  // stores a rider may receive offers for (consulted by dispatch when
+  // RIDER_STORE_SCOPING=true).
+  fastify.get('/:id/assignments', { schema: getStoreAssignmentsSchema }, ctrl.getStoreAssignments)
+  fastify.put('/:id/assignments', { schema: replaceStoreAssignmentsSchema }, ctrl.replaceStoreAssignments)
 
   // Task 12.4: POST /api/v1/admin/riders/:riderId/approve — requires riders.approve
   fastify.post('/:id/approve', {
