@@ -54,6 +54,16 @@ export async function ordersRoutes(fastify) {
     handler: controller.reorder,
   })
 
+  // 1c-2. Vendor quality/cleaning-video traceability for this order's
+  // items — what the invoice QR scan resolves to. Registered as a static
+  // suffix path (matched before the `/:orderId` param route below, same
+  // reasoning as `/active`) so `/quality-videos` on its own can never be
+  // mistaken for an orderId.
+  fastify.get('/:orderId/quality-videos', {
+    preHandler: [fastify.authenticate],
+    handler: controller.getQualityVideos,
+  })
+
   // 1d. Invoice PDF — OrdersService#getInvoice already existed and worked,
   // it just had no route (dashboard-side equivalent has one).
   fastify.get('/:orderId/invoice', {

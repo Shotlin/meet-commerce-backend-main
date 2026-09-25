@@ -220,6 +220,77 @@ export class InventoryService {
     return this.repository.listLots(warehouseId, productId)
   }
 
+  async getQualityTraceForOrderItems(orderItemIds) {
+    return this.repository.findQualityTraceForOrderItems(orderItemIds)
+  }
+
+  /**
+   * Fulfil one sold order line from FEFO-ordered inventory lots and record
+   * which lot(s) it actually came from — the link a customer's invoice QR
+   * later resolves back to a vendor's quality-video evidence.
+   *
+   * Deliberately best-effort: called from inside the same DB transaction
+   * as `placeOrder`'s own stock decrement, but a shortfall (no lots at
+   * all, or fewer lots than the quantity sold — e.g. the product was
+   * stocked manually and never received through vendor procurement) is
+   * not an error. `shop_products.stock_quantity` remains the one
+   * authoritative sellable-stock check; this is purely an additive
+   * traceability side-channel that must never block or fail a real order.
+   * Spills across lot boundaries automatically (drains the oldest/nearest-
+   * expiry lot first, then continues into the next one for the remainder)
+   * so old and newly-arrived stock of the same product are both correctly
+   * attributed without the caller needing to know lot boundaries exist.
+   */
+  async consumeForOrderItem(actorId, { warehouseId, productId, orderItemId, quantity }, client = null) {
+    if (!warehouseId || !productId || !orderItemId || !(Number(quantity) > 0)) {
+      return { allocations: [] }
+    }
+
+    const lots = await this.repository.findAvailableLotsFefo(warehouseId, productId, client)
+    let remaining = Number(quantity)
+    const allocations = []
+
+    for (const lot of lots) {
+      if (remaining <= 0) break
+      const available = Number(lot.quantity_on_hand) - Number(lot.quantity_reserved)
+      if (available <= 0) continue
+      const take = Math.min(available, remaining)
+
+      const updatedLot = await this.repository.consumeLotOnHand(lot.id, take, client)
+      if (!updatedLot) continue // lost a race to another consumer — try the next lot
+
+      await this.repository.writeLedgerEntry({
+        lot_id: lot.id,
+        warehouse_id: warehouseId,
+        product_id: productId,
+        movement_type: 'OUTBOUND',
+        quantity_change: -take,
+        balance_after: Number(updatedLot.quantity_on_hand),
+        reference_type: 'ORDER_ITEM',
+        reference_id: orderItemId,
+        actor_id: actorId,
+      })
+
+      const allocation = await this.repository.insertOrderItemAllocation(client, {
+        orderItemId,
+        inventoryLotId: lot.id,
+        quantityAllocated: take,
+      })
+      allocations.push(allocation)
+
+      remaining -= take
+    }
+
+    if (remaining > 0 && allocations.length > 0) {
+      logger.warn(
+        { orderItemId, productId, warehouseId, shortfall: remaining },
+        'Order item allocated from fewer lots than quantity sold — some of this sale is untraceable to a vendor batch'
+      )
+    }
+
+    return { allocations }
+  }
+
   async getLedgerEntries(warehouseId, productId = null) {
     return this.repository.getLedgerEntries(warehouseId, productId)
   }

@@ -1,5 +1,17 @@
 import PDFDocument from 'pdfkit'
+import QRCode from 'qrcode'
 import { STORE_INFO } from '../config/storeInfo.js'
+
+// Same payload format the mobile app's own on-screen QR already encodes
+// (order_qr_card.dart#orderQrPayload) — scanning either one (the printed
+// receipt or the in-app code) resolves to the same order. Plain and
+// human-checkable on purpose, not a signed/opaque token: the mobile scan
+// flow re-authenticates the request against the caller's own JWT before
+// returning anything (GET /orders/:id/quality-videos), so the QR text
+// itself carries no access on its own.
+function buildOrderQrPayload(order) {
+  return `FRESHCUTS-ORDER|${order.order_number || order.orderNumber}|${order.id}`
+}
 
 const TERMINAL_BANNER_STATUS = new Set(['CANCELLED', 'REFUNDED'])
 
@@ -372,7 +384,27 @@ function drawFooter(doc) {
     .text('We hope to serve you again soon.', PAGE_LEFT, doc.y, { width: PAGE_WIDTH, align: 'center' })
 }
 
-function renderReceipt(doc, order, address, items, { title }) {
+/**
+ * Draws the same order-identity QR the mobile app shows on-screen, plus a
+ * one-line prompt about what scanning it now does (open the vendor's
+ * cleaning/packing video for this order) — the actual video resolution
+ * happens app-side against the live backend, never baked into the PDF.
+ * `qrBuffer` is pre-rendered PNG bytes (QRCode.toBuffer is async; pdfkit's
+ * drawing calls are not, so the QR is generated once up front by the
+ * caller rather than mid-render).
+ */
+function drawQrCode(doc, qrBuffer) {
+  if (!qrBuffer) return
+  doc.y += 8
+  const qrSize = 70
+  const qrX = PAGE_LEFT + (PAGE_WIDTH - qrSize) / 2
+  doc.image(qrBuffer, qrX, doc.y, { width: qrSize, height: qrSize })
+  doc.y += qrSize + 4
+  doc.font('Helvetica').fontSize(7)
+    .text('Scan with the FreshCuts app to watch how this order was cleaned & packed', PAGE_LEFT, doc.y, { width: PAGE_WIDTH, align: 'center' })
+}
+
+function renderReceipt(doc, order, address, items, { title, qrBuffer }) {
   doc.registerFont(CURRENCY_FONT, STORE_INFO.currencyFontPath)
 
   drawStoreHeader(doc, title)
@@ -386,6 +418,7 @@ function renderReceipt(doc, order, address, items, { title }) {
 
   drawItemsTable(doc, items)
   drawTotals(doc, order)
+  drawQrCode(doc, qrBuffer)
   drawFooter(doc)
 
   return doc.y
@@ -407,11 +440,24 @@ function measureReceiptHeight(order, address, items, opts) {
   return Math.ceil(finalY) + RECEIPT_MARGIN
 }
 
-function generateReceiptPDF(order, opts) {
-  return new Promise((resolve, reject) => {
-    const { address, items } = parseOrderShape(order)
-    const height = measureReceiptHeight(order, address, items, opts)
+async function generateReceiptPDF(order, opts) {
+  // Generated once, up front — QRCode.toBuffer is async, and every call
+  // below this point (measuring, then the real render) is synchronous
+  // pdfkit drawing, so the QR can't be produced lazily mid-render. A
+  // failure here (never expected — the payload is plain text) degrades to
+  // no QR on the receipt rather than a failed invoice/packing-slip.
+  let qrBuffer = null
+  try {
+    qrBuffer = await QRCode.toBuffer(buildOrderQrPayload(order), { type: 'png', margin: 0, width: 280 })
+  } catch (err) {
+    qrBuffer = null
+  }
+  const opsWithQr = { ...opts, qrBuffer }
 
+  const { address, items } = parseOrderShape(order)
+  const height = measureReceiptHeight(order, address, items, opsWithQr)
+
+  return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: [RECEIPT_WIDTH, height], margin: RECEIPT_MARGIN })
     const chunks = []
 
@@ -419,7 +465,7 @@ function generateReceiptPDF(order, opts) {
     doc.on('end', () => resolve(Buffer.concat(chunks)))
     doc.on('error', reject)
 
-    renderReceipt(doc, order, address, items, opts)
+    renderReceipt(doc, order, address, items, opsWithQr)
     doc.end()
   })
 }

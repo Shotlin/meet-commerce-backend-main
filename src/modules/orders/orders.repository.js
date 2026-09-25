@@ -86,20 +86,26 @@ export class OrdersRepository {
       ]
     )
 
+    // itemIds[i] corresponds 1:1 to data.items[i] — the caller (placeOrder)
+    // uses this to attach inventory-lot allocations to the right row
+    // without a second round trip.
+    const itemIds = []
     for (const item of data.items) {
-      await client.query(
+      const { rows: itemRows } = await client.query(
         `INSERT INTO order_items (
           order_id, product_id, product_name, quantity, unit_price, subtotal,
           product_snapshot, shop_product_id, shop_id
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        RETURNING id`,
         [
           rows[0].id, item.productId, item.name, item.quantity, item.price,
           item.total, JSON.stringify(item), item.shopProductId || null,
           data.shopId,
         ]
       )
+      itemIds.push(itemRows[0].id)
     }
-    return rows[0]
+    return { ...rows[0], _orderItemIds: itemIds }
   }
 
   async findByIdAndUser(orderId, userId) {

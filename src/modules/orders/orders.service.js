@@ -15,6 +15,9 @@ import { ShopProductsRepository } from '../shop-products/shop-products.repositor
 import { CouponsRepository } from '../coupons/coupons.repository.js'
 import { CouponsService } from '../coupons/coupons.service.js'
 import { WalletRepository } from '../wallet/wallet.repository.js'
+import { InventoryRepository } from '../inventory/inventory.repository.js'
+import { InventoryService } from '../inventory/inventory.service.js'
+import { VendorProcurementRepository } from '../vendor-procurement/vendor-procurement.repository.js'
 
 const ALLOWED_TRANSITIONS = {
   CART_CREATED: ['ORDER_PLACED', 'CANCELLED'],
@@ -56,6 +59,8 @@ export class OrdersService {
     this.couponsRepo = deps?.couponsRepository || new CouponsRepository()
     this.couponsService = deps?.couponsService || new CouponsService(this.couponsRepo)
     this.walletRepo = deps?.walletRepository || new WalletRepository()
+    this.inventoryService = deps?.inventoryService || new InventoryService(new InventoryRepository())
+    this.vendorProcurementRepo = deps?.vendorProcurementRepository || new VendorProcurementRepository()
   }
 
   /**
@@ -250,7 +255,9 @@ export class OrdersService {
           )
         }
 
-        for (const item of group.items) {
+        const orderItemIds = row._orderItemIds || []
+        for (let i = 0; i < group.items.length; i++) {
+          const item = group.items[i]
           await this.shopProductsRepo.applyStockChange(client, {
             shopProductId: item.shopProductId,
             delta: -item.quantity,
@@ -259,6 +266,25 @@ export class OrdersService {
             orderId: row.id,
             reason: `Order ${orderNumber}`,
           })
+
+          // Best-effort vendor-batch traceability (never blocks the sale —
+          // see InventoryService#consumeForOrderItem's own doc comment).
+          const orderItemId = orderItemIds[i]
+          if (orderItemId && item.productId) {
+            try {
+              const warehouseId = await this.vendorProcurementRepo.ensureShopWarehouse(group.shopId)
+              await this.inventoryService.consumeForOrderItem(
+                customerId,
+                { warehouseId, productId: item.productId, orderItemId, quantity: item.quantity },
+                client
+              )
+            } catch (err) {
+              logger.warn(
+                { err, orderItemId, productId: item.productId, shopId: group.shopId },
+                'Inventory lot allocation failed for order item — order placement unaffected'
+              )
+            }
+          }
         }
         await this.repository.logStatusTransition(
           row.id, null, 'ORDER_PLACED', customerId, 'Order placed from mobile checkout', client
@@ -684,5 +710,58 @@ export class OrdersService {
       orderNumber: order.orderNumber || order.order_number,
       buffer,
     }
+  }
+
+  /**
+   * Resolves, per order line, the vendor quality/cleaning video that
+   * actually backed the batch sold to this customer — what the invoice QR
+   * scan opens. Ownership-scoped the same way as every other self-service
+   * order endpoint (§7.2 point 10's IDOR fix): always the caller's own
+   * order, never a client-supplied id. An item with no traceable
+   * allocation (e.g. it was stocked manually, outside vendor procurement)
+   * simply gets `video: null` rather than an error — this is a bonus
+   * trust signal, not a required part of viewing an order.
+   */
+  async getQualityVideos(userId, orderId) {
+    const order = await this.repository.findOrderById(orderId)
+    if (!order) {
+      return { success: false, statusCode: 404, message: 'Order not found' }
+    }
+    if (order.customer_id !== userId) {
+      return { success: false, statusCode: 403, message: 'Access denied' }
+    }
+
+    const items = order.items || []
+    const orderItemIds = items.map((item) => item.id).filter(Boolean)
+    const trace = await this.inventoryService.getQualityTraceForOrderItems(orderItemIds)
+
+    // findQualityTraceForOrderItems orders by quantity_allocated DESC per
+    // item, so the first row seen per order_item_id is already the lot
+    // that supplied the largest share of that line (the "primary" batch
+    // when a sale spans an old lot's tail end plus a newly-arrived one).
+    const primaryByItem = new Map()
+    for (const row of trace) {
+      if (!primaryByItem.has(row.order_item_id)) {
+        primaryByItem.set(row.order_item_id, row)
+      }
+    }
+
+    const results = items.map((item) => {
+      const match = primaryByItem.get(item.id)
+      if (!match || !match.video_url) {
+        return { orderItemId: item.id, productName: item.name, video: null }
+      }
+      return {
+        orderItemId: item.id,
+        productName: item.name,
+        video: {
+          url: match.video_url,
+          vendorName: match.vendor_name,
+          supplyNumber: match.supply_number,
+        },
+      }
+    })
+
+    return { success: true, orderId, items: results }
   }
 }

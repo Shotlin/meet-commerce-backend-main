@@ -47,11 +47,15 @@ export class InventoryRepository {
    */
   async findAvailableLotsFefo(warehouseId, productId, client = null) {
     const dbClient = client || { query: (sql, params) => query(sql, params) }
+    // Note: `inventory_lots` (migration 104) has no `state`/`version`
+    // columns — an earlier version of this query referenced both and would
+    // have thrown "column does not exist" the moment it was ever called;
+    // it never was (reserveFefo has no callers), which is how this stayed
+    // unnoticed. Fixed to match the real deployed schema.
     const { rows } = await dbClient.query(
       `SELECT * FROM inventory_lots
         WHERE warehouse_id = $1
           AND product_id = $2
-          AND state = 'AVAILABLE'
           AND expiry_date > CURRENT_DATE
           AND (quantity_on_hand - quantity_reserved) > 0
         ORDER BY expiry_date ASC, created_at ASC
@@ -75,10 +79,8 @@ export class InventoryRepository {
     const { rows } = await dbClient.query(
       `UPDATE inventory_lots
           SET quantity_reserved = quantity_reserved + $2,
-              version = version + 1,
               updated_at = NOW()
         WHERE id = $1
-          AND state = 'AVAILABLE'
           AND (quantity_on_hand - quantity_reserved) >= $2
         RETURNING *`,
       [lotId, deltaReserved]
@@ -92,7 +94,6 @@ export class InventoryRepository {
       `UPDATE inventory_lots
           SET quantity_on_hand = quantity_on_hand + $2,
               quantity_reserved = quantity_reserved + $3,
-              version = version + 1,
               updated_at = NOW()
         WHERE id = $1
         RETURNING *`,
@@ -171,6 +172,74 @@ export class InventoryRepository {
     return rows[0]
   }
 
+  /**
+   * Directly consume on-hand quantity from a lot (no reservation phase) —
+   * used when fulfilling an already-placed order line, not a pre-order
+   * hold. Guards against taking more than is actually on hand.
+   */
+  async consumeLotOnHand(lotId, quantity, client = null) {
+    const dbClient = client || { query: (sql, params) => query(sql, params) }
+    const { rows } = await dbClient.query(
+      `UPDATE inventory_lots
+          SET quantity_on_hand = quantity_on_hand - $2,
+              updated_at = NOW()
+        WHERE id = $1
+          AND quantity_on_hand >= $2
+        RETURNING *`,
+      [lotId, quantity]
+    )
+    return rows[0] || null
+  }
+
+  async insertOrderItemAllocation(client, { orderItemId, inventoryLotId, quantityAllocated }) {
+    const dbClient = client || { query: (sql, params) => query(sql, params) }
+    const { rows } = await dbClient.query(
+      `INSERT INTO order_item_inventory_allocations (order_item_id, inventory_lot_id, quantity_allocated)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
+      [orderItemId, inventoryLotId, quantityAllocated]
+    )
+    return rows[0]
+  }
+
+  /**
+   * Bulk-resolves the vendor-supply trace (supply order, vendor, quality
+   * evidence) for a set of order_item ids that were allocated against
+   * inventory lots at checkout — the chain the customer's invoice QR
+   * ultimately resolves. One query for all items on an order rather than
+   * N+1 per item.
+   */
+  async findQualityTraceForOrderItems(orderItemIds) {
+    if (!orderItemIds || orderItemIds.length === 0) return []
+    const { rows } = await query(
+      `SELECT
+         a.order_item_id,
+         a.inventory_lot_id,
+         a.quantity_allocated,
+         so.id AS supply_order_id,
+         so.supply_number,
+         v.id AS vendor_id,
+         v.name AS vendor_name,
+         e.id AS evidence_id,
+         e.media_url AS video_url,
+         e.review_status AS evidence_review_status,
+         e.created_at AS evidence_created_at
+       FROM order_item_inventory_allocations a
+       JOIN procurement_receipt_items pri ON pri.inventory_lot_id = a.inventory_lot_id
+       JOIN procurement_receipts pr ON pr.id = pri.receipt_id
+       JOIN procurement_supply_orders so ON so.id = pr.supply_order_id
+       JOIN vendors v ON v.id = so.vendor_id
+       LEFT JOIN procurement_evidence e
+         ON e.supply_order_id = so.id
+        AND e.evidence_type = 'QUALITY_VIDEO'
+        AND e.review_status IS DISTINCT FROM 'REJECTED'
+       WHERE a.order_item_id = ANY($1::uuid[])
+       ORDER BY a.order_item_id, a.quantity_allocated DESC, e.created_at DESC`,
+      [orderItemIds]
+    )
+    return rows
+  }
+
   async listLots(warehouseId, productId = null) {
     const conditions = []
     const params = []
@@ -190,10 +259,25 @@ export class InventoryRepository {
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
+    // Real vendor/supply/video traceability for this lot, when it
+    // originated from a vendor-procurement receipt (§ the vendor batch →
+    // video linkage feature) — a lot created any other way (manual
+    // adjustment) simply has NULLs here, not a fabricated vendor.
     const { rows } = await query(
-      `SELECT l.*, p.name AS product_name
+      `SELECT l.*, p.name AS product_name, w.name AS warehouse_name, w.code AS warehouse_code,
+              so.id AS supply_order_id, so.supply_number,
+              v.id AS vendor_id, v.name AS vendor_name,
+              (SELECT e.media_url FROM procurement_evidence e
+                WHERE e.supply_order_id = so.id AND e.evidence_type = 'QUALITY_VIDEO'
+                  AND e.review_status IS DISTINCT FROM 'REJECTED'
+                ORDER BY e.created_at DESC LIMIT 1) AS video_url
          FROM inventory_lots l
          JOIN products p ON p.id = l.product_id
+         LEFT JOIN warehouses w ON w.id = l.warehouse_id
+         LEFT JOIN procurement_receipt_items pri ON pri.inventory_lot_id = l.id
+         LEFT JOIN procurement_receipts pr ON pr.id = pri.receipt_id
+         LEFT JOIN procurement_supply_orders so ON so.id = pr.supply_order_id
+         LEFT JOIN vendors v ON v.id = so.vendor_id
         ${where}
         ORDER BY l.expiry_date ASC`,
       params

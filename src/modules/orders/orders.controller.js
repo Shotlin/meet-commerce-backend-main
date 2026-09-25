@@ -108,6 +108,16 @@ export class OrdersController {
     return reply.status(200).send({ success: true, data, warnings })
   }
 
+  getQualityVideos = async (req, reply) => {
+    const customerId = req.userId || req.user.id
+    const { orderId } = req.params
+    const result = await this.service.getQualityVideos(customerId, orderId)
+    if (!result.success) {
+      return reply.status(result.statusCode || 400).send({ success: false, message: result.message })
+    }
+    return reply.status(200).send({ success: true, data: { orderId: result.orderId, items: result.items } })
+  }
+
   getInvoice = async (req, reply) => {
     const customerId = req.userId || req.user.id
     const { orderId } = req.params
