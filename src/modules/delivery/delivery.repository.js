@@ -14,7 +14,7 @@ export class DeliveryRepository {
 
   async getRiderProfile(userId) {
     const { rows } = await query(
-      `SELECT rp.*, u.name, u.phone, u.avatar_url
+      `SELECT rp.*, u.name, u.phone, u.avatar_url, u.is_active
        FROM rider_profiles rp
        JOIN users u ON u.id = rp.user_id
        WHERE rp.user_id = $1`,
@@ -915,7 +915,8 @@ export class DeliveryRepository {
   async updateLocation(riderId, latitude, longitude) {
     await query(
       `UPDATE rider_profiles
-       SET current_lat = $1, current_lng = $2, updated_at = NOW()
+       SET current_lat = $1, current_lng = $2, updated_at = NOW(),
+           location_updated_at = NOW()
        WHERE user_id = $3`,
       [latitude, longitude, riderId]
     )

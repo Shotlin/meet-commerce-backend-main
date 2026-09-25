@@ -8,6 +8,10 @@ import { getSocketEmitter } from '../plugins/socket-emitter.js'
 import { cacheDeletePattern } from '../utils/cache.js'
 import { ACTIVE_THEME_CACHE_PREFIX, LEGACY_TAB_CACHE_KEY } from '../modules/themes/theme-cache.js'
 import { emit as emitAudit } from '../utils/audit-log.js'
+import {
+  evaluateLocationFreshness,
+  logStaleLocationSkips,
+} from './dispatch-eligibility.js'
 
 const DEFAULT_RIDER_EARNING = 25
 // Auto-assign fans out to every online rider sorted by distance with no
@@ -529,7 +533,8 @@ async function handleAutoAssign({ orderId, source = 'SYSTEM' }) {
 
   // Task 12.2: Select riders with status AVAILABLE, is_active=true, no non-terminal assignment
   const { rows: candidateRiders } = await query(
-    `SELECT rp.user_id, rp.current_lat, rp.current_lng, rp.updated_at
+    `SELECT rp.user_id, rp.current_lat, rp.current_lng, rp.updated_at,
+            rp.location_updated_at
      FROM rider_profiles rp
      JOIN users u ON u.id = rp.user_id
      WHERE rp.is_approved = true
@@ -549,15 +554,19 @@ async function handleAutoAssign({ orderId, source = 'SYSTEM' }) {
   }
 
   const candidatesWithDistance = []
+  let skippedForLocation = 0
 
   for (const rider of candidateRiders) {
     let lat = toNumber(rider.current_lat)
     let lng = toNumber(rider.current_lng)
+    let redisUpdatedAt = null
 
     try {
       const cached = await redis.get(`rider:location:${rider.user_id}`)
       if (cached) {
         const parsed = JSON.parse(cached)
+        redisUpdatedAt = toNumber(parsed.updatedAt, Number.NaN)
+        if (!Number.isFinite(redisUpdatedAt)) redisUpdatedAt = null
         lat = toNumber(parsed.lat, lat)
         lng = toNumber(parsed.lng, lng)
       }
@@ -565,31 +574,48 @@ async function handleAutoAssign({ orderId, source = 'SYSTEM' }) {
       // Ignore Redis parse/cache errors and fallback to DB coordinates.
     }
 
-    let distance = null
-    if (Number.isFinite(lat) && Number.isFinite(lng)) {
-      const resolvedDistance = haversineDistanceKm(store.pickup_lat, store.pickup_lng, lat, lng)
-      if (Number.isFinite(resolvedDistance)) {
-        distance = resolvedDistance
-      }
-    } else {
-      logger.debug(
-        { orderId, riderId: rider.user_id },
-        'Offering order without rider distance: rider coordinates unavailable'
-      )
+    // Blueprint §5: the fix itself must be fresh enough for dispatch.
+    // Redis hits carry their own updatedAt; the durable fallback is the
+    // rider_profiles.location_updated_at column. Riders with no fix at
+    // all are not offered orders.
+    const freshness = evaluateLocationFreshness({
+      redisUpdatedAt,
+      dbLocationUpdatedAt: rider.location_updated_at,
+    })
+    if (!freshness.fresh) {
+      skippedForLocation += 1
+      continue
+    }
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      skippedForLocation += 1
+      continue
+    }
+
+    const resolvedDistance = haversineDistanceKm(store.pickup_lat, store.pickup_lng, lat, lng)
+    if (!Number.isFinite(resolvedDistance)) {
+      skippedForLocation += 1
+      continue
     }
 
     candidatesWithDistance.push({
       riderId: rider.user_id,
-      distanceKm: distance,
+      distanceKm: resolvedDistance,
     })
   }
 
+  logStaleLocationSkips({
+    skipped: skippedForLocation,
+    total: candidateRiders.length,
+    orderId,
+    source,
+  })
+
   // Drop riders whose KNOWN distance puts them outside any realistic
-  // delivery range. Riders with no resolvable location (distanceKm
-  // null) are kept — we can't confirm they're too far — but sort
-  // last, same as before.
+  // delivery range. Every remaining candidate now has a finite distance
+  // (stale/missing fixes were dropped above).
   const inRangeCandidates = candidatesWithDistance.filter(
-    (c) => c.distanceKm === null || c.distanceKm <= MAX_AUTO_ASSIGN_DISTANCE_KM
+    (c) => c.distanceKm <= MAX_AUTO_ASSIGN_DISTANCE_KM
   )
 
   if (!inRangeCandidates.length) {

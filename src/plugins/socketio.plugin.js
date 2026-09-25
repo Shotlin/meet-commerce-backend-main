@@ -160,7 +160,8 @@ async function socketioPlugin(fastify) {
           // Persist latest coordinates in DB for assignment fallback.
           await query(
             `UPDATE rider_profiles
-             SET current_lat = $1, current_lng = $2, updated_at = NOW()
+             SET current_lat = $1, current_lng = $2, updated_at = NOW(),
+                 location_updated_at = NOW()
              WHERE user_id = $3`,
             [latitude, longitude, userId]
           )

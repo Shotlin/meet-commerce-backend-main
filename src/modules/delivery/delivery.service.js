@@ -42,11 +42,22 @@ export class DeliveryService {
       throw err
     }
     // Return a proper 403 instead of a plain Error (which became HTTP 500).
-    // The Flutter app maps any non-success on toggle-online to RiderNotApprovedError.
+    // The Flutter app maps the typed code to a route into the approval flow.
     if (!profile.is_approved) {
       const err = new Error('Rider profile is not yet approved')
       err.statusCode = 403
       err.code = 'RIDER_NOT_APPROVED'
+      throw err
+    }
+    // A suspended (deactivated) rider must never be able to go back
+    // online and re-enter the dispatch pool — the dispatch candidate
+    // query already filters `u.is_active`, this gate keeps the app's
+    // online state honest with it (re-enable via the admin suspend
+    // control, not by re-toggling).
+    if (isOnline && profile.is_active === false) {
+      const err = new Error('Rider account is suspended')
+      err.statusCode = 403
+      err.code = 'RIDER_SUSPENDED'
       throw err
     }
 
