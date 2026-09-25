@@ -1,6 +1,7 @@
 import { generateOTP, storeOTP, verifyOTP } from '../../utils/otp.js'
 import { sendSmsOtp, verifySmsOtp } from '../../utils/sms.js'
 import { generateTokenPair, signAccessToken, signRefreshToken, verifyToken } from '../../utils/jwt.js'
+import { ROLE_PERMISSIONS } from '../../utils/permissions.js'
 import { orderQueue } from '../../config/bullmq.js'
 import { redis } from '../../config/redis.js'
 import { env } from '../../config/env.js'
@@ -298,6 +299,70 @@ export class AuthService {
           name: user.name,
           role: user.role,
           isNewUser,
+        },
+      }
+    }
+
+    // ─── Vendor branch: vendor_users members get vendor-scoped JWTs ─────
+    // Mirrors the shop-staff auto-scope: permissions come from the vendor
+    // role maps (ROLE_PERMISSIONS), vendorId enables vendor-scope middleware.
+    let vendorMemberships = []
+    try {
+      vendorMemberships = await this.repo.findActiveVendorUsersByUserId(user.id)
+    } catch (err) {
+      logger.warn(
+        { err: err.message, userId: user.id, action: 'vendor_users_lookup_failed' },
+        'Vendor membership lookup failed during login — falling back to standard auth'
+      )
+      vendorMemberships = []
+    }
+
+    if (vendorMemberships.length > 0) {
+      const vendorRoles = [...new Set(vendorMemberships.map((m) => m.role))]
+      const permissionSet = new Set()
+      for (const vendorRole of vendorRoles) {
+        for (const perm of ROLE_PERMISSIONS[vendorRole] ?? []) {
+          permissionSet.add(perm)
+        }
+      }
+      const permissions = [...permissionSet]
+      // Single membership auto-scopes; multi-vendor users may pass X-Vendor-Id
+      // (vendor-scope middleware validates membership per request).
+      const vendorId = vendorMemberships.length === 1 ? vendorMemberships[0].vendor_id : null
+
+      const accessToken = signAccessToken(
+        {
+          id: user.id,
+          phone: user.phone,
+          role: user.role,
+          vendorId,
+          vendorRoles,
+          permissions,
+        },
+        { expiresIn: '24h' }
+      )
+      const refreshToken = signRefreshToken({ id: user.id, phone: user.phone, role: user.role })
+      await redis.set(`${REFRESH_TOKEN_PREFIX}${user.id}`, refreshToken, 'EX', 7 * 24 * 60 * 60)
+
+      logger.info(
+        { userId: user.id, vendorId, vendorRoles, action: 'vendor_login_scoped' },
+        'Vendor user signed in with vendor-scoped JWT'
+      )
+
+      return {
+        success: true,
+        accessToken,
+        refreshToken,
+        user: {
+          id: user.id,
+          phone: user.phone,
+          name: user.name,
+          role: user.role,
+          isNewUser,
+          isVerified: false,
+          vendor_id: vendorId,
+          vendor_roles: vendorRoles,
+          permissions,
         },
       }
     }

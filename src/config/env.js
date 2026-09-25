@@ -93,6 +93,9 @@ const envSchema = z.object({
   // File Upload
   MAX_FILE_SIZE: z.coerce.number().default(5242880),
   ALLOWED_IMAGE_TYPES: z.string().default('image/jpeg,image/png,image/webp'),
+  // Procurement quality-evidence videos (Cloudinary resource_type 'video')
+  MAX_VIDEO_FILE_SIZE: z.coerce.number().default(104857600),
+  ALLOWED_VIDEO_TYPES: z.string().default('video/mp4,video/quicktime,video/webm'),
 
   // Logging
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error']).default('info'),

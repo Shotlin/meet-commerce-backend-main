@@ -21,6 +21,16 @@ export default async function uploadsRoutes(fastify) {
   }, controller.uploadImage.bind(controller))
 
   // POST /images — Upload multiple images [ADMIN]
+  fastify.post('/video', {
+    schema: {
+      tags: ['Uploads'],
+      summary: 'Upload quality-evidence video to Cloudinary',
+      security: [{ bearerAuth: [] }],
+      consumes: ['multipart/form-data'],
+    },
+    preHandler: [fastify.authenticate],
+  }, controller.uploadVideo.bind(controller))
+
   fastify.post('/images', {
     schema: {
       tags: ['Uploads'],

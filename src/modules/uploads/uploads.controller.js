@@ -37,6 +37,33 @@ export class UploadsController {
   }
 
   /**
+   * POST /video — Upload quality-evidence video (vendor/admin)
+   * Per-call fileSize override: evidence videos are larger than images.
+   */
+  async uploadVideo(request, reply) {
+    const file = await request.file({ limits: { fileSize: env.MAX_VIDEO_FILE_SIZE } })
+
+    if (!file) {
+      return reply.code(400).send(error('No file uploaded', 'NO_FILE'))
+    }
+
+    const allowed = env.ALLOWED_VIDEO_TYPES.split(',')
+    if (!allowed.includes(file.mimetype)) {
+      return reply.code(400).send(error('Invalid file type. Allowed: MP4, MOV, WebM', 'INVALID_FILE_TYPE'))
+    }
+
+    try {
+      const result = await this.service.uploadVideo(file.file, {
+        folder: `${env.CLOUDINARY_FOLDER}/evidence`,
+      })
+      return reply.code(200).send(success(result, 'Video uploaded'))
+    } catch (err) {
+      request.log.error({ err }, 'Video upload failed in controller')
+      return reply.code(400).send(error('Failed to upload video. Check cloud provider credentials.', 'UPLOAD_FAILED'))
+    }
+  }
+
+  /**
    * POST /images — Upload multiple images [ADMIN]
    *
    * Each part's file stream must be fully drained before @fastify/multipart's

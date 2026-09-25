@@ -174,6 +174,14 @@ export const buildApp = async () => {
     prefix: "/api/v1/procurement",
   });
 
+  // Vendor Procurement — FreshCuts Vendor Procurement (store requirements / RFQ / supply)
+  await app.register(import("./modules/vendor-procurement/vendor-procurement.routes.js"), {
+    prefix: "/api/v1/vendor-procurement",
+  });
+  await app.register(import("./modules/vendor-procurement/vendor-procurement.vendor.routes.js"), {
+    prefix: "/api/v1/vendor-procurement/vendor",
+  });
+
   // Warehouse Receipts & Quality Control — Phase 5 Subsystem
   await app.register(
     import("./modules/warehouse-receipts/warehouse-receipts.routes.js"),

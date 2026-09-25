@@ -548,25 +548,30 @@ export class ProductsService {
 
     if (categoryIds.length > 0) {
       const sameCategoryLimit = Math.round(limit * 0.6);
-      const sameCategory = await this.repo.findPopularByCategories(
-        categoryIds,
-        [...excluded],
-        sameCategoryLimit,
-        allocatedShopIds,
-      );
+      // The same-category product query and the related-category-id lookup
+      // (below) read only the inputs already known at this point — neither
+      // depends on the other's result — so they run concurrently instead of
+      // one DB round trip after another; `excluded`/`picked` are still
+      // updated from `sameCategory` strictly before the related-category
+      // fetch runs, preserving the exact same dedup/ordering behavior.
+      const [sameCategory, relatedCategoryIdLists] = await Promise.all([
+        this.repo.findPopularByCategories(
+          categoryIds,
+          [...excluded],
+          sameCategoryLimit,
+          allocatedShopIds,
+        ),
+        Promise.all(
+          categoryIds.map((id) => this._getCachedSuggestionCategoryIds(id)),
+        ),
+      ]);
       for (const product of sameCategory) {
         picked.push(product);
         excluded.add(product.id);
       }
 
       const relatedCategoryIds = [
-        ...new Set(
-          (
-            await Promise.all(
-              categoryIds.map((id) => this._getCachedSuggestionCategoryIds(id)),
-            )
-          ).flat(),
-        ),
+        ...new Set(relatedCategoryIdLists.flat()),
       ].filter((id) => !categoryIds.includes(id));
 
       if (relatedCategoryIds.length > 0) {

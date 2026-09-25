@@ -16,7 +16,12 @@
  *      → if X-Vendor-Id header present: validates UUID shape and active vendor status
  *      → attaches request.vendorId = header value
  *      → otherwise allows with request.vendorId = null (platform-wide ops)
- *   3. Non-vendor non-admin users
+ *   3. Vendor staff user without JWT vendor claims (e.g. OTP-login vendor app)
+ *      → resolves active vendor_users memberships for the user
+ *      → exactly one membership: attaches request.vendorId = that vendor
+ *      → multiple memberships: X-Vendor-Id header / :vendorId param must select
+ *        one of them, otherwise 409 VENDOR_SELECTION_REQUIRED
+ *   4. Non-vendor non-admin users
  *      → attaches request.vendorId = null
  *      → if options.requireVendor === true, rejects 403 CROSS_SCOPE_ACCESS_DENIED
  *
@@ -163,6 +168,28 @@ export function extractVendorId(req) {
 }
 
 /**
+ * Resolve the active vendor memberships of a user (no caching — used at most
+ * once per request when the JWT carries no vendor claim)
+ * @param {string} userId
+ * @returns {Promise<string[]>} active vendor UUIDs
+ */
+export async function findActiveVendorMemberships(userId) {
+  const { rows } = await query(
+    `SELECT vu.vendor_id
+       FROM vendor_users vu
+       JOIN vendors v ON v.id = vu.vendor_id
+      WHERE vu.user_id = $1
+        AND vu.is_active = true
+        AND vu.deleted_at IS NULL
+        AND v.is_active = true
+        AND v.deleted_at IS NULL
+      ORDER BY vu.created_at`,
+    [userId]
+  )
+  return rows.map((row) => row.vendor_id)
+}
+
+/**
  * Fastify preHandler middleware enforcing vendor scope isolation
  * @param {object} [options]
  * @param {boolean} [options.requireVendor=false] Rejects non-vendor requests with 403
@@ -226,7 +253,25 @@ export function requireVendorScope(options = {}) {
       return
     }
 
-    // 3. Non-vendor non-admin user
+    // 3. Vendor staff user without JWT vendor claims — resolve memberships
+    const memberships = await findActiveVendorMemberships(user.id)
+    if (memberships.length === 1) {
+      request.vendorId = memberships[0]
+      return
+    }
+    if (memberships.length > 1) {
+      if (candidateVendorId && memberships.includes(candidateVendorId)) {
+        request.vendorId = candidateVendorId
+        return
+      }
+      return reply.status(409).send({
+        success: false,
+        code: 'VENDOR_SELECTION_REQUIRED',
+        message: 'This account belongs to multiple vendors — select a vendor context',
+      })
+    }
+
+    // 4. Non-vendor non-admin user
     request.vendorId = null
     if (requireVendor) {
       return reply.status(403).send({

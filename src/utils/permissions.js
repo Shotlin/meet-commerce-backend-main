@@ -405,7 +405,7 @@ export const ROLE_PERMISSIONS = Object.freeze({
   MARKETING_USER: Object.freeze(new Set(PERMISSION_GROUPS.MARKETING_LOYALTY.concat(['reports.global_view']))),
   READ_ONLY_ANALYST: Object.freeze(new Set(ALL_PERMISSIONS.filter((p) => p.endsWith('.view') || p.endsWith('.global_view') || p.endsWith('.export')))),
   VENDOR_OWNER: Object.freeze(new Set(PERMISSION_GROUPS.VENDORS.concat(PERMISSION_GROUPS.CATALOGUE_PROPOSALS, PERMISSION_GROUPS.PROCUREMENT, ['shop_products.create', 'shop_products.update', 'shop_orders.view']))),
-  VENDOR_OPERATOR: Object.freeze(new Set(['product_proposals.create', 'product_proposals.update', 'procurement.respond', 'supply_batches.view', 'supply_batches.create', 'supply_batches.update', 'batch_evidence.upload', 'shop_products.view', 'shop_orders.view'])),
+  VENDOR_OPERATOR: Object.freeze(new Set(['product_proposals.create', 'product_proposals.update', 'procurement.respond', 'procurement.view', 'supply_batches.view', 'supply_batches.create', 'supply_batches.update', 'batch_evidence.upload', 'shop_products.view', 'shop_orders.view'])),
   WAREHOUSE_RECEIVER: Object.freeze(new Set(['warehouse_receipts.view', 'warehouse_receipts.create', 'warehouse_receipts.update', 'warehouse_receipts.submit_qc', 'warehouses.view', 'supply_batches.view'])),
   QUALITY_CONTROLLER: Object.freeze(new Set(['quality_control.view', 'quality_control.decide', 'quality_control.override', 'warehouse_receipts.view', 'supply_batches.view', 'batch_evidence.view'])),
   PICKER: Object.freeze(new Set(['fulfilment.view', 'fulfilment.pick', 'inventory_lots.view'])),

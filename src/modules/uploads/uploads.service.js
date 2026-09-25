@@ -71,6 +71,41 @@ export class UploadsService {
   }
 
   /**
+   * Upload a video (procurement quality evidence) to Cloudinary.
+   * @param {ReadableStream} fileStream
+   * @param {object} options - { folder, publicId }
+   * @returns {Promise<{ url: string, publicId: string, duration: number|null, format: string|null, bytes: number|null }>}
+   */
+  async uploadVideo(fileStream, { folder, publicId } = {}) {
+    try {
+      const result = await new Promise((resolve, reject) => {
+        cloudinary.uploader.upload_stream(
+          {
+            resource_type: 'video',
+            folder: folder || `${env.CLOUDINARY_FOLDER}/evidence`,
+            public_id: publicId,
+          },
+          (err, video) => {
+            if (err) reject(err)
+            else resolve(video)
+          }
+        ).end(fileStream)
+      })
+
+      return {
+        url: result.secure_url,
+        publicId: result.public_id,
+        duration: result.duration ?? null,
+        format: result.format ?? null,
+        bytes: result.bytes ?? null,
+      }
+    } catch (error) {
+      logger.error({ err: error }, 'Cloudinary video upload failed')
+      throw error
+    }
+  }
+
+  /**
    * Delete an image from Cloudinary by public_id
    * @param {string} publicId
    */

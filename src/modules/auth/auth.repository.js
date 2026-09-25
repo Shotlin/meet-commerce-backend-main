@@ -159,6 +159,25 @@ export class AuthRepository {
    * @param {string} userId
    * @returns {Promise<Array<{shop_staff_id, shop_id, shop_name, role, permissions}>>}
    */
+  /**
+   * Active vendor memberships for a user (vendor app login: vendor-scoped JWT).
+   */
+  async findActiveVendorUsersByUserId(userId) {
+    const { rows } = await query(
+      `SELECT vu.vendor_id, vu.role
+         FROM vendor_users vu
+         JOIN vendors v ON v.id = vu.vendor_id
+        WHERE vu.user_id = $1
+          AND vu.is_active = true
+          AND vu.deleted_at IS NULL
+          AND v.is_active = true
+          AND v.deleted_at IS NULL
+        ORDER BY vu.created_at`,
+      [userId]
+    )
+    return rows
+  }
+
   async findActiveShopStaffByUserId(userId) {
     const { rows } = await query(
       `SELECT
