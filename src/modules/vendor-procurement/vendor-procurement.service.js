@@ -413,7 +413,15 @@ export class VendorProcurementService {
       this.repository.findRequestItems(requestId),
       this.repository.listRecipients(requestId),
     ])
-    return { ...request, items, recipients }
+
+    // Surface the awarded supply order's live fulfilment status here too —
+    // previously the store/admin request-detail view had no visibility at
+    // all into what the awarded vendor was actually doing after award (had
+    // to separately know to go look in the unlinked Supply Orders list).
+    const supplyOrderId = await this.repository.findSupplyOrderByRequestId(requestId)
+    const supplyOrder = supplyOrderId ? await this.repository.findSupplyOrderById(supplyOrderId) : null
+
+    return { ...request, items, recipients, supply_order: supplyOrder }
   }
 
   // ── Vendor side: inbox, detail, fixed-offer accept/decline ────

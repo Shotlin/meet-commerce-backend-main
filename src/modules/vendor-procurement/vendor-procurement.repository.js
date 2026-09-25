@@ -1068,6 +1068,21 @@ export class VendorProcurementRepository {
     return { supplies: rows, total: countResult.rows[0].total, page, limit }
   }
 
+  /**
+   * The supply order created when this request was awarded, if any — a
+   * request has at most one (unique constraint on procurement_supply_orders,
+   * migration 135). Used to surface live fulfilment status on the store/
+   * admin-facing request detail page, which otherwise had no visibility at
+   * all into what the awarded vendor was actually doing after award.
+   */
+  async findSupplyOrderByRequestId(requestId) {
+    const { rows } = await query(
+      `SELECT id FROM procurement_supply_orders WHERE request_id = $1 AND deleted_at IS NULL LIMIT 1`,
+      [requestId]
+    )
+    return rows[0]?.id ?? null
+  }
+
   async findSupplyOrderById(supplyOrderId) {
     const { rows } = await query(
       `SELECT so.*, r.request_number, r.title AS request_title, r.quality_instructions,
