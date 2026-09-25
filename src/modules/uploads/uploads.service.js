@@ -79,7 +79,7 @@ export class UploadsService {
   async uploadVideo(fileStream, { folder, publicId } = {}) {
     try {
       const result = await new Promise((resolve, reject) => {
-        cloudinary.uploader.upload_stream(
+        const uploadStream = cloudinary.uploader.upload_stream(
           {
             resource_type: 'video',
             folder: folder || `${env.CLOUDINARY_FOLDER}/evidence`,
@@ -89,7 +89,14 @@ export class UploadsService {
             if (err) reject(err)
             else resolve(video)
           }
-        ).end(fileStream)
+        )
+        // `fileStream` is a real Readable (the multipart part's stream) —
+        // it must be piped, not handed to `.end()`, which requires a
+        // Buffer/string for a non-object-mode Writable. `.end(fileStream)`
+        // throws instead of uploading anything; see the sibling working
+        // pattern in utils/cloudinary-upload.js.
+        fileStream.on('error', reject)
+        fileStream.pipe(uploadStream)
       })
 
       return {

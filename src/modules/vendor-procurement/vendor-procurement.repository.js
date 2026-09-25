@@ -917,6 +917,27 @@ export class VendorProcurementRepository {
     return rows
   }
 
+  /**
+   * A vendor's own still-editable quote (SUBMITTED/UPDATED) for a request, if
+   * any — lets the vendor app tell "submit a new quote" from "edit my live
+   * quote" apart, and pre-fill the edit form with real persisted values.
+   */
+  async findLiveQuoteByRequestAndVendor(requestId, vendorId) {
+    const { rows } = await query(
+      `SELECT * FROM procurement_quotes
+        WHERE request_id = $1 AND vendor_id = $2 AND status IN ('SUBMITTED', 'UPDATED')
+        LIMIT 1`,
+      [requestId, vendorId]
+    )
+    const quote = rows[0] ?? null
+    if (!quote) return null
+    const items = await query(
+      `SELECT * FROM procurement_quote_items WHERE quote_id = $1 ORDER BY created_at, id`,
+      [quote.id]
+    )
+    return { ...quote, items: items.rows }
+  }
+
   async insertQuoteTx(client, quoteData) {
     const { rows } = await client.query(
       `INSERT INTO procurement_quotes

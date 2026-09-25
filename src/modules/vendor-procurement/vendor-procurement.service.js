@@ -463,6 +463,14 @@ export class VendorProcurementService {
 
     await this.repository.markRecipientViewed(recipient.id)
 
+    // RFQ only — a fixed offer has no per-vendor quote to edit. Lets the
+    // client tell "submit a new quote" apart from "edit my live quote" and
+    // pre-fill the edit form with real, persisted values instead of
+    // re-deriving them (or silently re-POSTing a duplicate).
+    const myQuote = request.mode === 'RFQ'
+      ? await this.repository.findLiveQuoteByRequestAndVendor(requestId, vendorId)
+      : null
+
     return {
       request: {
         id: request.id,
@@ -481,6 +489,7 @@ export class VendorProcurementService {
       },
       items: visibleItems,
       recipient,
+      quote: myQuote,
     }
   }
 

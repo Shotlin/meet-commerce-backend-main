@@ -92,7 +92,7 @@ export class VendorProcurementController {
     const { requestId } = req.params
     const vendorId = req.vendorId
     const actorId = req.userId ?? req.user?.id
-    const actorRole = req.user?.vendor_role ?? 'VENDOR_OWNER'
+    const actorRole = req.user?.vendorRoles?.[0] ?? 'VENDOR_OWNER'
     const result = await this.service.acceptFixedOffer(requestId, vendorId, actorId, actorRole)
     return reply.status(200).send({ success: true, data: result })
   }
@@ -111,7 +111,7 @@ export class VendorProcurementController {
     const { requestId } = req.params
     const vendorId = req.vendorId
     const actorId = req.userId ?? req.user?.id
-    const actorRole = req.user?.vendor_role ?? 'VENDOR_OWNER'
+    const actorRole = req.user?.vendorRoles?.[0] ?? 'VENDOR_OWNER'
     const result = await this.service.submitQuote(requestId, vendorId, actorId, req.body, actorRole)
     return reply.status(201).send({ success: true, data: result })
   }
@@ -259,7 +259,7 @@ export class VendorProcurementController {
     const { supplyId } = req.params
     const vendorId = req.vendorId
     const actorId = req.userId ?? req.user?.id
-    const actorRole = req.user?.vendor_role ?? 'VENDOR_OWNER'
+    const actorRole = req.user?.vendorRoles?.[0] ?? 'VENDOR_OWNER'
     const result = await this.service.attachEvidence(supplyId, vendorId, actorId, req.body, actorRole)
     return reply.status(201).send({ success: true, data: result })
   }
@@ -268,7 +268,7 @@ export class VendorProcurementController {
     const { supplyId } = req.params
     const vendorId = req.vendorId
     const actorId = req.userId ?? req.user?.id
-    const actorRole = req.user?.vendor_role ?? 'VENDOR_OWNER'
+    const actorRole = req.user?.vendorRoles?.[0] ?? 'VENDOR_OWNER'
     const result = await this.service.updateSupplyStatus(
       supplyId,
       vendorId,
