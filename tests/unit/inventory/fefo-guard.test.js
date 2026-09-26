@@ -41,4 +41,37 @@ describe('Inventory Repository — FEFO & Concurrency Quantity Guard (Spec §5.4
     expect(sql).toContain('(quantity_on_hand - quantity_reserved) >= $2')
     expect(sql).not.toContain('version')
   })
+
+  // Regression test for a real, live production incident (2026-09-26):
+  // writeLedgerEntry used to always run on the shared pool's own query()
+  // regardless of an in-progress transaction, opening a SECOND connection
+  // for a write that's causally dependent on a lock the FIRST connection
+  // (consumeLotOnHand's own UPDATE, run on the real transaction client)
+  // was already holding uncommitted — a guaranteed self-deadlock. Every
+  // `placeOrder` reaching this step hung forever until the pool was fully
+  // exhausted. Fixed to accept and use the passed transaction client, the
+  // same pattern `consumeLotOnHand`/`reserveLotQuantityGuard` already used.
+  it('writeLedgerEntry runs on the passed transaction client, never a second, unrelated connection', async () => {
+    const repo = new InventoryRepository()
+    const mockQuery = vi.fn().mockResolvedValue({ rows: [{ id: 'ledger-1' }] })
+    const mockClient = { query: mockQuery }
+
+    await repo.writeLedgerEntry(
+      {
+        lot_id: 'lot-1',
+        warehouse_id: 'wh-1',
+        product_id: 'prod-1',
+        movement_type: 'OUTBOUND',
+        quantity_change: -3,
+        balance_after: 7,
+        reference_type: 'ORDER_ITEM',
+        reference_id: 'oi-1',
+        actor_id: 'actor-1',
+      },
+      mockClient
+    )
+
+    expect(mockQuery).toHaveBeenCalledTimes(1)
+    expect(mockQuery.mock.calls[0][0]).toContain('INSERT INTO stock_ledger_entries')
+  })
 })

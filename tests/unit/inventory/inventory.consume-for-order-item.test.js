@@ -63,6 +63,13 @@ describe('InventoryService#consumeForOrderItem', () => {
       quantityAllocated: 3,
     })
     expect(result.allocations).toHaveLength(1)
+    // Regression test for a real production incident: writeLedgerEntry
+    // MUST run on the same transaction client as consumeLotOnHand's own
+    // UPDATE — a plain pool query() here (a second, unrelated connection)
+    // would block waiting on a lock that connection's own open transaction
+    // holds, deadlocking every order that reaches this step (confirmed
+    // live: every `placeOrder` call hung forever until the connection
+    // pool was fully exhausted).
     expect(repository.writeLedgerEntry).toHaveBeenCalledWith(
       expect.objectContaining({
         lot_id: 'lot-a',
@@ -70,7 +77,8 @@ describe('InventoryService#consumeForOrderItem', () => {
         quantity_change: -3,
         reference_type: 'ORDER_ITEM',
         reference_id: 'oi-1',
-      })
+      }),
+      'tx-client'
     )
   })
 

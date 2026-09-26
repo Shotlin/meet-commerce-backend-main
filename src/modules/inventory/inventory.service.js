@@ -269,7 +269,7 @@ export class InventoryService {
         reference_type: 'ORDER_ITEM',
         reference_id: orderItemId,
         actor_id: actorId,
-      })
+      }, client)
 
       const allocation = await this.repository.insertOrderItemAllocation(client, {
         orderItemId,

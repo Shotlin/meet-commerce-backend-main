@@ -141,8 +141,24 @@ export class InventoryRepository {
   }
 
   // ─── LEDGER (APPEND-ONLY) ───────────────────────────
-  async writeLedgerEntry({ lot_id, warehouse_id, product_id, movement_type, quantity_change, balance_after, reference_type = null, reference_id = null, actor_id = null }) {
-    const { rows } = await query(
+  /**
+   * @param {object} [client] - DB transaction client. MUST be passed by any
+   *   caller running inside an already-open transaction (e.g.
+   *   `consumeForOrderItem`, called from `placeOrder`'s own transaction) —
+   *   this insert writes to `stock_ledger_entries`, which references the
+   *   very `inventory_lots` row that transaction's own prior UPDATE just
+   *   locked. Defaulting to the bare pool `query()` here used to open a
+   *   SECOND, unrelated connection for that insert while the first
+   *   connection's transaction sat open uncommitted — that second
+   *   connection would then block waiting on a lock the first one held,
+   *   which could only ever be released by that same second query
+   *   returning: a guaranteed self-deadlock, confirmed live in production
+   *   (every `placeOrder` reaching this step hung forever, each one
+   *   consuming another pool connection until the pool was exhausted).
+   */
+  async writeLedgerEntry({ lot_id, warehouse_id, product_id, movement_type, quantity_change, balance_after, reference_type = null, reference_id = null, actor_id = null }, client = null) {
+    const dbClient = client || { query: (sql, params) => query(sql, params) }
+    const { rows } = await dbClient.query(
       `INSERT INTO stock_ledger_entries (lot_id, warehouse_id, product_id, movement_type, quantity_change, balance_after, reference_type, reference_id, actor_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
