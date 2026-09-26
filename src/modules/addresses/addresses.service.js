@@ -312,8 +312,21 @@ export class AddressesService {
    * form uses this to auto-fill City instead of trusting the public
    * reverse-geocoder, which is unreliable for several rural/small-town
    * pincodes (e.g. parts of Gujarat resolving to the wrong city).
+   *
+   * Optional [lat]/[lng] (the map pin the Add Address screen already has
+   * selected at this point) let a pincode the plain list check rejects
+   * still be accepted when it falls inside a shop's delivery radius —
+   * mirroring AllocationRepository#isServiceable, the same pincode-OR-radius
+   * rule the actual address save (create/update below) and shop allocation
+   * already enforce. Without this, an address genuinely served by radius
+   * (not its literal pincode) showed "Delivery is not available at this pin
+   * yet." on this live-typing check even though saving that exact address
+   * would have succeeded — this screen's own check was stricter than what
+   * it was previewing. Purely additive: a caller that omits lat/lng (there
+   * are others — see location_prompt_provider.dart#pinServed) gets the
+   * exact same pincode-list-only behavior as before.
    */
-  async validatePincode(pincode) {
+  async validatePincode(pincode, lat, lng) {
     const [etaMinutes, mapping] = await Promise.all([
       this._resolveEtaMinutes(),
       this.pincodeMappingsRepo.findActiveByPincode(pincode).catch((err) => {
@@ -333,9 +346,18 @@ export class AddressesService {
 
     // null means no shops configured — allow all so the app isn't blocked.
     // The queried PIN is normalised the same way stored PINs are.
-    const available =
+    let available =
       serviceablePincodes === null ||
       serviceablePincodes.has(cleanPincode(pincode))
+
+    if (!available && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) {
+      available = await this.allocationRepo.isServiceable({
+        pincode,
+        lat: Number(lat),
+        lng: Number(lng),
+      })
+    }
+
     return {
       available,
       deliveryFee: available ? 29 : 0,

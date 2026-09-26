@@ -127,6 +127,14 @@ export const validatePincodeSchema = {
     required: ['pincode'],
     properties: {
       pincode: { type: 'string', pattern: '^[1-9][0-9]{5}$' },
+      // Optional — the Add Address screen's already-selected map pin.
+      // When present, a pincode the plain list check rejects can still be
+      // accepted via delivery-radius match (see
+      // addresses.service.js#validatePincode). ajv's removeAdditional:'all'
+      // strips any body field not declared here, so these must be listed
+      // for a caller that starts sending them to actually reach the handler.
+      lat: { type: 'number', minimum: -90, maximum: 90 },
+      lng: { type: 'number', minimum: -180, maximum: 180 },
     },
   },
   response: {
