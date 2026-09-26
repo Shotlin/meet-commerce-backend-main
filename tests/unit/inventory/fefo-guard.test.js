@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
+
+const databaseMock = vi.hoisted(() => ({ query: vi.fn(async () => ({ rows: [] })) }))
+vi.mock('../../../src/config/database.js', () => ({ query: databaseMock.query }))
+
 import { InventoryRepository } from '../../../src/modules/inventory/inventory.repository.js'
 
 describe('Inventory Repository — FEFO & Concurrency Quantity Guard (Spec §5.4.1, §7.8.2, §7.8.5)', () => {
@@ -73,5 +77,37 @@ describe('Inventory Repository — FEFO & Concurrency Quantity Guard (Spec §5.4
 
     expect(mockQuery).toHaveBeenCalledTimes(1)
     expect(mockQuery.mock.calls[0][0]).toContain('INSERT INTO stock_ledger_entries')
+  })
+
+  // Regression test for a real, live playback bug (2026-09-26): vendor
+  // quality-video evidence is often recorded on an iPhone (HEVC/H.265),
+  // which Android's video_player plays inconsistently — confirmed live
+  // against a real production asset. Both real read paths for a video URL
+  // must transcode to H.264 on delivery via toH264VideoUrl.
+  it('findQualityTraceForOrderItems transcodes video_url to H.264 for Android playback compatibility', async () => {
+    databaseMock.query.mockResolvedValueOnce({
+      rows: [
+        {
+          order_item_id: 'oi-1',
+          video_url: 'https://res.cloudinary.com/demo/video/upload/v1/evidence/clip.mp4',
+        },
+      ],
+    })
+    const repo = new InventoryRepository()
+
+    const rows = await repo.findQualityTraceForOrderItems(['oi-1'])
+
+    expect(rows[0].video_url).toBe('https://res.cloudinary.com/demo/video/upload/vc_h264/v1/evidence/clip.mp4')
+  })
+
+  it('listLots also transcodes video_url to H.264 (powers the dashboard Inventory page preview)', async () => {
+    databaseMock.query.mockResolvedValueOnce({
+      rows: [{ id: 'lot-1', video_url: 'https://res.cloudinary.com/demo/video/upload/v1/evidence/clip.mp4' }],
+    })
+    const repo = new InventoryRepository()
+
+    const rows = await repo.listLots('wh-1', 'p-1')
+
+    expect(rows[0].video_url).toBe('https://res.cloudinary.com/demo/video/upload/vc_h264/v1/evidence/clip.mp4')
   })
 })

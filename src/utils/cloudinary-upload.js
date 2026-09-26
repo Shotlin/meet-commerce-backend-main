@@ -77,3 +77,24 @@ export async function uploadImageWithCloudinaryFallback(fileStream, options) {
   }
 }
 
+/**
+ * Vendor quality-video evidence is very often recorded on an iPhone, which
+ * defaults to HEVC/H.265 (`codecs=hvc1`) — confirmed live: a real evidence
+ * asset's own `Content-Type` came back `video/mp4;codecs=hvc1`. Android's
+ * `video_player`/ExoPlayer HEVC support is inconsistent across devices, and
+ * a real customer report ("Watch Video" spins or never renders) traced
+ * directly to exactly this codec. Cloudinary can transcode on the fly via
+ * a `vc_h264` delivery transformation segment in the URL — inserted here
+ * so every consumer (mobile app, admin dashboard) gets a broadly-
+ * compatible H.264 stream without re-uploading or re-encoding the
+ * original asset. A non-Cloudinary or malformed URL is returned unchanged.
+ */
+export function toH264VideoUrl(url) {
+  if (!url || typeof url !== 'string') return url
+  const marker = '/video/upload/'
+  const idx = url.indexOf(marker)
+  if (idx === -1) return url
+  const insertAt = idx + marker.length
+  return `${url.slice(0, insertAt)}vc_h264/${url.slice(insertAt)}`
+}
+

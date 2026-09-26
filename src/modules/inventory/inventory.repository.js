@@ -6,6 +6,7 @@
  */
 
 import { query } from '../../config/database.js'
+import { toH264VideoUrl } from '../../utils/cloudinary-upload.js'
 
 export class InventoryRepository {
   // ─── LOTS ───────────────────────────────────────────
@@ -291,7 +292,10 @@ export class InventoryRepository {
        ORDER BY a.order_item_id, a.quantity_allocated DESC, e.created_at DESC`,
       [orderItemIds]
     )
-    return rows
+    // Real vendor evidence is very often HEVC (recorded on an iPhone) —
+    // transcode to H.264 on delivery so it actually plays on Android
+    // (see toH264VideoUrl's own doc comment for the live-confirmed bug).
+    return rows.map((row) => ({ ...row, video_url: toH264VideoUrl(row.video_url) }))
   }
 
   async listLots(warehouseId, productId = null) {
@@ -344,6 +348,8 @@ export class InventoryRepository {
         ORDER BY l.expiry_date ASC`,
       params
     )
-    return rows
+    // Same HEVC→H.264 delivery fix as findQualityTraceForOrderItems — this
+    // powers the dashboard Inventory page's own video preview.
+    return rows.map((row) => ({ ...row, video_url: toH264VideoUrl(row.video_url) }))
   }
 }
