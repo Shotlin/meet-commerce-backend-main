@@ -525,13 +525,14 @@ export class VendorProcurementRepository {
     for (const item of items) {
       const { rows } = await client.query(
         `INSERT INTO procurement_supply_order_items
-           (supply_order_id, request_item_id, category_id, item_name, agreed_quantity, unit, agreed_unit_price, agreed_line_total)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           (supply_order_id, request_item_id, category_id, product_id, item_name, agreed_quantity, unit, agreed_unit_price, agreed_line_total)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING *`,
         [
           supplyOrderId,
           item.request_item_id ?? null,
           item.category_id ?? null,
+          item.product_id ?? null,
           item.item_name,
           item.agreed_quantity,
           item.unit ?? 'KG',

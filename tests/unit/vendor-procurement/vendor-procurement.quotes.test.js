@@ -52,7 +52,7 @@ function quoteService(repoOverrides = {}) {
     findRequestById: vi.fn(async () => RFQ_REQUEST),
     findRecipientByRequestAndVendor: vi.fn(async () => ({ id: 'rec-1', status: 'NEW' })),
     listQuotesForRequest: vi.fn(async () => []),
-    findRequestItems: vi.fn(async () => [{ id: 'item-1', category_id: 'cat-1', item_name: 'Mutton', requested_quantity: 20, unit: 'KG' }]),
+    findRequestItems: vi.fn(async () => [{ id: 'item-1', category_id: 'cat-1', product_id: 'prod-mutton-1', item_name: 'Mutton', requested_quantity: 20, unit: 'KG' }]),
     insertQuoteTx: vi.fn(async (_c, data) => ({ id: 'quote-1', status: 'SUBMITTED', ...data })),
     insertQuoteItemsTx: vi.fn(async (_c, _q, items) => items.map((i, ix) => ({ id: `qi-${ix}`, ...i }))),
     markRecipientResponded: vi.fn(async () => {}),
@@ -196,6 +196,17 @@ describe('awardQuote', () => {
     }))
     const supplyItems = repo.insertSupplyOrderItemsTx.mock.calls[0][2]
     expect(supplyItems[0]).toMatchObject({ agreed_quantity: 20, agreed_unit_price: 250, agreed_line_total: 5000 })
+  })
+
+  it('resolves product_id from the original request item (a quote item never carries its own) onto the supply order item', async () => {
+    const { service, repo } = quoteService({
+      findQuoteById: vi.fn(async () => AWARD_QUOTE),
+    })
+
+    await service.awardQuote('quote-1', 'actor-1')
+
+    const supplyItems = repo.insertSupplyOrderItemsTx.mock.calls[0][2]
+    expect(supplyItems[0].product_id).toBe('prod-mutton-1')
   })
 
   it('rejects awarding a non-live quote', async () => {

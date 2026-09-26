@@ -87,7 +87,7 @@ function baseSupply(overrides = {}) {
     request_id: 'req-1',
     supply_number: 'SUP-TEST-0001',
     status: 'DELIVERED_PENDING_RECEIPT',
-    items: [{ id: SUPPLY_ITEM_ID, agreed_quantity: 10 }],
+    items: [{ id: SUPPLY_ITEM_ID, agreed_quantity: 10, product_id: null }],
     ...overrides,
   }
 }
@@ -296,5 +296,62 @@ describe('receiveSupply — shop-product stock sync', () => {
     expect(result.inventory[0].shop_stock_linked).toBeUndefined()
     expect(shopProductsRepoMock.findByShopAndProduct).not.toHaveBeenCalled()
     expect(shopProductsRepoMock.applyStockChange).not.toHaveBeenCalled()
+  })
+
+  it('pre-fills product_id from the awarded supply-order item when the receipt line omits it — a known SKU is never re-picked from scratch', async () => {
+    const { service } = makeService({
+      findSupplyOrderById: vi.fn(async () => baseSupply({ items: [{ id: SUPPLY_ITEM_ID, agreed_quantity: 10, product_id: PRODUCT_ID }] })),
+    })
+    shopProductsRepoMock.findByShopAndProduct.mockResolvedValue({
+      id: 'sp-1',
+      shop_id: SHOP_ID,
+      product_id: PRODUCT_ID,
+      stock_quantity: 5,
+      deleted_at: null,
+    })
+    shopProductsRepoMock.applyStockChange.mockResolvedValue({
+      stockProduct: { id: 'sp-1', stock_quantity: 15 },
+      movement: { id: 'mv-1' },
+    })
+    inventoryServiceMock.registerInbound.mockResolvedValue({ lot: { id: 'lot-1' } })
+
+    // No product_id at all in the receiving payload — it must come from
+    // what was already agreed at award time (migration 143).
+    const result = await service.receiveSupply(SUPPLY_ID, ACTOR_ID, {
+      items: [{ supply_order_item_id: SUPPLY_ITEM_ID, received_quantity: 10, accepted_quantity: 10, rejected_quantity: 0 }],
+    })
+
+    expect(result.inventory[0].inventory_skipped).toBe(false)
+    expect(inventoryServiceMock.registerInbound).toHaveBeenCalledWith(
+      ACTOR_ID,
+      expect.objectContaining({ product_id: PRODUCT_ID })
+    )
+  })
+
+  it('still lets staff override the pre-filled product_id per receipt line if the physical goods differ', async () => {
+    const OTHER_PRODUCT = 'product-OTHER'
+    const { service } = makeService({
+      findSupplyOrderById: vi.fn(async () => baseSupply({ items: [{ id: SUPPLY_ITEM_ID, agreed_quantity: 10, product_id: PRODUCT_ID }] })),
+    })
+    shopProductsRepoMock.findByShopAndProduct.mockResolvedValue({
+      id: 'sp-2',
+      shop_id: SHOP_ID,
+      product_id: OTHER_PRODUCT,
+      stock_quantity: 5,
+      deleted_at: null,
+    })
+    shopProductsRepoMock.applyStockChange.mockResolvedValue({
+      stockProduct: { id: 'sp-2', stock_quantity: 15 },
+      movement: { id: 'mv-2' },
+    })
+    inventoryServiceMock.registerInbound.mockResolvedValue({ lot: { id: 'lot-2' } })
+
+    const result = await service.receiveSupply(SUPPLY_ID, ACTOR_ID, acceptedReceiptPayload({ product_id: OTHER_PRODUCT }))
+
+    expect(result.inventory[0].inventory_skipped).toBe(false)
+    expect(inventoryServiceMock.registerInbound).toHaveBeenCalledWith(
+      ACTOR_ID,
+      expect.objectContaining({ product_id: OTHER_PRODUCT })
+    )
   })
 })

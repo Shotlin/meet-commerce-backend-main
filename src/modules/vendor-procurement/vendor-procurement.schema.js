@@ -9,7 +9,13 @@ const UUID_PATTERN = { type: 'string', pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-
 
 const REQUEST_ITEM_SCHEMA = {
   type: 'object',
-  required: ['category_id', 'item_name', 'requested_quantity'],
+  // `product_id` is required (not just `category_id` + free-text
+  // `item_name`) so a request line is tied to one exact catalog SKU from
+  // creation — the whole point being that it then flows forward unchanged
+  // through the quote/award/supply-order-item chain to receiving, instead
+  // of staff re-guessing which SKU a "Chicken Breast Boneless" text label
+  // meant at goods-in time.
+  required: ['category_id', 'product_id', 'item_name', 'requested_quantity'],
   properties: {
     category_id: UUID_PATTERN,
     product_id: UUID_PATTERN,

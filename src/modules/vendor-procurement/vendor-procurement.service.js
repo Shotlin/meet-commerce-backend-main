@@ -585,6 +585,7 @@ export class VendorProcurementService {
         items.map((item) => ({
           request_item_id: item.id,
           category_id: item.category_id,
+          product_id: item.product_id ?? null,
           item_name: item.item_name,
           agreed_quantity: item.requested_quantity,
           unit: item.unit,
@@ -953,6 +954,7 @@ export class VendorProcurementService {
           return {
             request_item_id: item.request_item_id,
             category_id: source ? source.category_id : null,
+            product_id: source ? source.product_id ?? null : null,
             item_name: source ? source.item_name : 'Item',
             agreed_quantity: item.quoted_quantity,
             unit: source ? source.unit : 'KG',
@@ -1344,7 +1346,12 @@ export class VendorProcurementService {
         received_quantity: received,
         accepted_quantity: accepted,
         rejected_quantity: rejected,
-        product_id: line.product_id ?? null,
+        // Pre-filled from the request → award chain (see
+        // insertSupplyOrderItemsTx's `product_id`, migration 143) whenever
+        // the receiving line itself didn't override it — staff confirming
+        // an already-known SKU no longer has to re-pick it from scratch,
+        // but can still correct it per line if needed.
+        product_id: line.product_id ?? supplyItem.product_id ?? null,
         issue_category: line.issue_category ?? null,
         issue_note: line.issue_note ?? null,
         expiry_date: line.expiry_date ?? null,
@@ -1679,8 +1686,12 @@ export class VendorProcurementService {
       throw procurementError('At least one item is required', 422, 'PROCUREMENT_ITEMS_REQUIRED')
     }
     for (const item of items) {
-      if (!item.category_id || !item.item_name) {
-        throw procurementError('Each item needs a category and a name', 422, 'PROCUREMENT_ITEM_INVALID')
+      if (!item.category_id || !item.product_id || !item.item_name) {
+        throw procurementError(
+          'Each item needs a category, a specific catalog product, and a name',
+          422,
+          'PROCUREMENT_ITEM_INVALID'
+        )
       }
       if (!(Number(item.requested_quantity) > 0)) {
         throw procurementError('Item quantities must be greater than zero', 422, 'PROCUREMENT_ITEM_INVALID')

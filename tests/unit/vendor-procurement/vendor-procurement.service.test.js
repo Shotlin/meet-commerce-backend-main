@@ -75,6 +75,7 @@ function makeService(repoOverrides = {}) {
 
 const FIXED_ITEM = {
   category_id: '11111111-1111-1111-1111-111111111111',
+  product_id: '99999999-9999-9999-9999-999999999999',
   item_name: 'Chicken',
   requested_quantity: 20,
   unit: 'KG',
@@ -83,6 +84,7 @@ const FIXED_ITEM = {
 
 const RFQ_ITEM = {
   category_id: '11111111-1111-1111-1111-111111111111',
+  product_id: '88888888-8888-8888-8888-888888888888',
   item_name: 'Mutton',
   requested_quantity: 20,
   unit: 'KG',
@@ -469,7 +471,7 @@ describe('acceptFixedOffer', () => {
       awardRequestTx: vi.fn(async (_c, _id, vendorId, total) => ({ id: 'req-1', status: 'AWARDED', awarded_vendor_id: vendorId, award_total: total })),
       setRecipientStatus: vi.fn(async () => ({ id: 'rec-1', status: 'AWARDED' })),
       setOtherRecipientsNotSelectedTx: vi.fn(async () => []),
-      findRequestItems: vi.fn(async () => [{ id: 'item-1', category_id: 'cat-1', item_name: 'Chicken', requested_quantity: 20, unit: 'KG', fixed_unit_price: 250, fixed_line_total: 5000 }]),
+      findRequestItems: vi.fn(async () => [{ id: 'item-1', category_id: 'cat-1', product_id: 'prod-chicken-1', item_name: 'Chicken', requested_quantity: 20, unit: 'KG', fixed_unit_price: 250, fixed_line_total: 5000 }]),
       insertSupplyOrderTx: vi.fn(async () => ({ id: 'supply-1', supply_number: 'SUP-TEST-0001' })),
       insertSupplyOrderItemsTx: vi.fn(async () => []),
       insertSupplyEventTx: vi.fn(async () => ({ id: 'evt-1' })),
@@ -493,6 +495,15 @@ describe('acceptFixedOffer', () => {
     }))
     const itemsArg = repo.insertSupplyOrderItemsTx.mock.calls[0][2]
     expect(itemsArg[0]).toMatchObject({ agreed_quantity: 20, agreed_unit_price: 250, agreed_line_total: 5000 })
+  })
+
+  it('copies the request item’s exact product_id onto the supply order item — the "which SKU" link that must survive award', async () => {
+    const { service, repo } = acceptService()
+
+    await service.acceptFixedOffer('req-1', 'vendor-1', 'actor-1')
+
+    const itemsArg = repo.insertSupplyOrderItemsTx.mock.calls[0][2]
+    expect(itemsArg[0].product_id).toBe('prod-chicken-1')
   })
 
   it('returns ALREADY_AWARDED when the conditional award loses the race (0 rows)', async () => {

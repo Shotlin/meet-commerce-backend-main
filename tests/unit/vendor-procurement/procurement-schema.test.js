@@ -138,3 +138,22 @@ describe('migration 136 — evidence, receipts, reviews', () => {
     )
   })
 })
+
+describe('migration 143 — supply order item product linkage', () => {
+  const supplyOrderItemsSql = read('143_procurement_supply_order_items_product_id.sql')
+
+  it('adds a nullable product_id FK to procurement_supply_order_items so a request item’s exact SKU survives award', () => {
+    expect(supplyOrderItemsSql).toContain('ALTER TABLE procurement_supply_order_items')
+    expect(supplyOrderItemsSql).toContain(
+      'ADD COLUMN IF NOT EXISTS product_id UUID REFERENCES products(id) ON DELETE SET NULL'
+    )
+  })
+})
+
+describe('REQUEST_ITEM_SCHEMA — product_id is now required, not just category + free text', () => {
+  it('rejects a CreateRequestSchema item that has no product_id', async () => {
+    const { CreateRequestSchema } = await import('../../../src/modules/vendor-procurement/vendor-procurement.schema.js')
+    const itemSchema = CreateRequestSchema.properties.items.items
+    expect(itemSchema.required).toContain('product_id')
+  })
+})
