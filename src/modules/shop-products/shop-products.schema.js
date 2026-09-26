@@ -150,6 +150,19 @@ export const adjustStockSchema = z.object({
 // that never came through the real Vendor Procurement receiving pipeline
 // (§7.5.1) — the lot itself is always tagged `is_manual_entry`, so it can
 // never be mistaken for a real vendor-procurement lot downstream.
+// ─── LOOKUP INVENTORY LOTS FOR A NOT-YET-ADDED PRODUCT ──
+// GET /api/v1/shops/:shopId/products/lookup-inventory-lots?productId=…
+// "Add Product to Shop" counterpart to GET /shop-products/:id/inventory-lots
+// — looks up real vendor-received batches for a master catalog product
+// that hasn't been added to this shop yet (no shop_products id exists).
+export const shopIdOnlyParamSchema = z.object({
+  shopId: z.string().uuid(),
+})
+
+export const lookupInventoryLotsQuerySchema = z.object({
+  productId: z.string().uuid(),
+})
+
 export const createManualInventoryLotSchema = z.object({
   vendor_name: z.string().trim().min(2).max(255),
   quantity: z.number().positive().max(STOCK_MAX),

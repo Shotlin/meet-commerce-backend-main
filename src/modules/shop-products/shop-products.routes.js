@@ -360,6 +360,44 @@ export async function shopProductsNestedRoutes(fastify) {
     controller.createManualInventoryLot.bind(controller)
   )
 
+  // GET /lookup-inventory-lots?productId=… — "Add Product to Shop"
+  // counterpart to GET /shop-products/:id/inventory-lots: real vendor
+  // batches for a product that hasn't been added to this shop yet (so
+  // there's no shop_products id to key off).
+  fastify.get(
+    '/lookup-inventory-lots',
+    {
+      schema: {
+        tags: ['Shop Products'],
+        summary: 'Look up vendor inventory lots for a product not yet added to this shop',
+        security: [{ bearerAuth: [] }],
+        params: {
+          type: 'object',
+          required: ['shopId'],
+          properties: {
+            shopId: { type: 'string', format: 'uuid' },
+          },
+        },
+        querystring: {
+          type: 'object',
+          required: ['productId'],
+          properties: {
+            productId: { type: 'string', format: 'uuid' },
+          },
+        },
+      },
+      preHandler: [
+        fastify.authenticate,
+        shopScope,
+        requirePermission('shop_products.view'),
+      ],
+      config: {
+        requiredPermission: 'shop_products.view',
+      },
+    },
+    controller.lookupInventoryLotsForProduct.bind(controller)
+  )
+
   // POST /bulk-price-update — up to 500 items in one tx, price-only
   // (no stock_movements rows written). Rate-limited to bound the
   // long-lock surface — bulk operations are deliberately throttled

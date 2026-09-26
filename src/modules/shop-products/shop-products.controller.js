@@ -8,6 +8,8 @@ import {
   shopProductRouteParamsSchema,
   adjustStockSchema,
   createManualInventoryLotSchema,
+  shopIdOnlyParamSchema,
+  lookupInventoryLotsQuerySchema,
   bulkPriceUpdateSchema,
   listStockMovementsQuerySchema,
   approveShopProductSchema,
@@ -397,6 +399,39 @@ export class ShopProductsController {
     return reply
       .code(201)
       .send(success(result.data, 'Vendor batch backfilled'))
+  }
+
+  // ────────────────────────────────────────────────────────
+  // GET /api/v1/shops/:shopId/products/lookup-inventory-lots?productId=…
+  // "Add Product to Shop" counterpart to getInventoryLots — see
+  // ShopProductsService#getInventoryLotsForProduct.
+  // ────────────────────────────────────────────────────────
+  async lookupInventoryLotsForProduct(request, reply) {
+    const shopId = request.shopId || request.params?.shopId
+    if (!shopId) return this._missingShopReply(reply)
+
+    const paramsParsed = shopIdOnlyParamSchema.safeParse(request.params)
+    if (!paramsParsed.success) {
+      return reply
+        .code(400)
+        .send(error(this._formatZodErrors(paramsParsed.error), 'VALIDATION_ERROR'))
+    }
+
+    const queryParsed = lookupInventoryLotsQuerySchema.safeParse(request.query)
+    if (!queryParsed.success) {
+      return reply
+        .code(400)
+        .send(error(this._formatZodErrors(queryParsed.error), 'VALIDATION_ERROR'))
+    }
+
+    const result = await this.service.getInventoryLotsForProduct(
+      paramsParsed.data.shopId,
+      queryParsed.data.productId
+    )
+
+    return reply
+      .code(200)
+      .send(success(result, 'Inventory lots fetched'))
   }
 
   // ────────────────────────────────────────────────────────

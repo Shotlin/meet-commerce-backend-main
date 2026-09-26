@@ -633,6 +633,41 @@ export class ShopProductsService {
   }
 
   /**
+   * The "Add Product to Shop" counterpart to `getInventoryLots` above —
+   * looks up real vendor-received batches for a master catalog product
+   * BEFORE it's ever been added to this shop as a `shop_products` row. The
+   * real gap this closes: a store can run a full procurement request →
+   * award → receive cycle for a product before it's priced/listed for the
+   * shop at all — `receiveSupply`'s stock-sync bridge (§7.5.1) deliberately
+   * skips syncing stock in that case (no `shop_products` row exists yet
+   * to sync onto), leaving the received quantity sitting correctly in
+   * `inventory_lots` but invisible to "Add Product to Shop", which used to
+   * just ask for a disconnected, typed-from-scratch Stock number. Same
+   * read-only, never-creates-a-warehouse posture as `getInventoryLots`.
+   *
+   * @param {string} shopId
+   * @param {string} productId — the master `products.id` being considered
+   *   for "Add Product to Shop", NOT a shop_products id (none exists yet).
+   * @returns {Promise<{lots:object[], lotQuantityTotal:number}>}
+   */
+  async getInventoryLotsForProduct(shopId, productId) {
+    const vendorProcurementRepo = new VendorProcurementRepository()
+    const warehouseId = await vendorProcurementRepo.findShopWarehouseId(shopId)
+    if (!warehouseId) {
+      return { lots: [], lotQuantityTotal: 0 }
+    }
+
+    const inventoryRepo = new InventoryRepository()
+    const lots = await inventoryRepo.listLots(warehouseId, productId)
+    const lotQuantityTotal = lots.reduce(
+      (sum, lot) => sum + Number(lot.quantity_on_hand ?? 0),
+      0
+    )
+
+    return { lots, lotQuantityTotal }
+  }
+
+  /**
    * Manually backfill a vendor-batch record for a shop product whose stock
    * never came through the real Vendor Procurement receiving pipeline
    * (§7.5.1) — e.g. stock typed in by hand before a vendor relationship was
