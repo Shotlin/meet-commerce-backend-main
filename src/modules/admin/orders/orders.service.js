@@ -8,6 +8,8 @@ import { NotificationsService } from '../../notifications/notifications.service.
 import { buildCustomerOrderEventNotification } from '../../notifications/customer-order-event.helper.js'
 import { ShopProductsRepository } from '../../shop-products/shop-products.repository.js'
 import { ShopProductsService } from '../../shop-products/shop-products.service.js'
+import { InventoryRepository } from '../../inventory/inventory.repository.js'
+import { InventoryService } from '../../inventory/inventory.service.js'
 import ExcelJS from 'exceljs'
 
 const ASSIGNABLE_ORDER_STATUSES = new Set(['CONFIRMED', 'PREPARING', 'PACKED'])
@@ -167,7 +169,62 @@ export class AdminOrdersService {
     ])
     if (!order) throw { statusCode: 404, message: 'Order not found' }
     this._assertShopAccess(order, requestShopId)
-    return { ...order, items, timeline, payment, delivery, settlement: this._buildSettlementSummary(order, settlementHistory) }
+    const qualityEvidence = await this._getQualityEvidence(items)
+    return {
+      ...order,
+      items,
+      timeline,
+      payment,
+      delivery,
+      settlement: this._buildSettlementSummary(order, settlementHistory),
+      quality_evidence: qualityEvidence,
+    }
+  }
+
+  /**
+   * The real vendor quality-video trace for this order's items (§7.5) —
+   * this is the "Vendor Cutting Evidence" the dashboard's Order Detail
+   * drawer has always had a rendering slot for, but which stayed
+   * permanently null since the 2026-09-23 Orders rebuild: at that time
+   * there was genuinely no backend data model for it (only ever a fake
+   * `CuttingEvidencePlayer`, deleted, never fabricated again since). A
+   * real one now exists — a vendor's cleaning/packing video, resolved via
+   * order_item → inventory_lot allocation → procurement receipt → supply
+   * order → vendor — this just wires the admin view to it.
+   *
+   * Mirrors `orders.service.js#getQualityVideos`'s own primary-lot
+   * selection (`findQualityTraceForOrderItems` orders by
+   * `quantity_allocated DESC` per item, so the first row seen per
+   * order_item_id already is the lot that supplied the largest share of
+   * that line) — keep both in sync if either changes.
+   */
+  async _getQualityEvidence(items) {
+    const orderItemIds = (items || []).map((item) => item.id).filter(Boolean)
+    if (orderItemIds.length === 0) return []
+
+    const inventoryService = new InventoryService(new InventoryRepository())
+    const trace = await inventoryService.getQualityTraceForOrderItems(orderItemIds)
+
+    const primaryByItem = new Map()
+    for (const row of trace) {
+      if (!primaryByItem.has(row.order_item_id)) {
+        primaryByItem.set(row.order_item_id, row)
+      }
+    }
+
+    return items
+      .map((item) => {
+        const match = primaryByItem.get(item.id)
+        if (!match || !match.video_url) return null
+        return {
+          orderItemId: item.id,
+          productName: item.product_name,
+          videoUrl: match.video_url,
+          vendorName: match.vendor_name,
+          supplyNumber: match.supply_number,
+        }
+      })
+      .filter(Boolean)
   }
 
   /**
