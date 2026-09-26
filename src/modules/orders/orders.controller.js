@@ -115,7 +115,10 @@ export class OrdersController {
     if (!result.success) {
       return reply.status(result.statusCode || 400).send({ success: false, message: result.message })
     }
-    return reply.status(200).send({ success: true, data: { orderId: result.orderId, items: result.items } })
+    return reply.status(200).send({
+      success: true,
+      data: { orderId: result.orderId, orderNumber: result.orderNumber, items: result.items },
+    })
   }
 
   getInvoice = async (req, reply) => {

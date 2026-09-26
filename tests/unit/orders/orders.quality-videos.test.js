@@ -12,6 +12,7 @@ function makeOrder(overrides = {}) {
   return {
     id: 'order-1',
     customer_id: 'user-1',
+    order_number: 'FC-KOL-20260926-0001',
     items: [
       { id: 'oi-1', productId: 'prod-1', name: 'Chicken Breast 500g' },
       { id: 'oi-2', productId: 'prod-2', name: 'Mutton Curry Cut 1kg' },
@@ -28,6 +29,18 @@ function makeService({ order = makeOrder(), trace = [] } = {}) {
 }
 
 describe('OrdersService.getQualityVideos', () => {
+  // Regression for a real user-reported concern (2026-09-26): two of the
+  // same customer's orders drawing from the same real vendor batch
+  // legitimately show the identical video — correct, not a leak — but the
+  // mobile screen never displayed WHICH order it resolved, so there was no
+  // way to visually confirm it wasn't just reusing stale/cached data.
+  // `orderNumber` lets the client show this unambiguously.
+  it('always returns the real order_number the video was resolved for, so the client can display which order this is', async () => {
+    const { service } = makeService({ order: makeOrder({ order_number: 'FC-KOL-20260926-0002' }) })
+    const result = await service.getQualityVideos('user-1', 'order-1')
+    expect(result.orderNumber).toBe('FC-KOL-20260926-0002')
+  })
+
   it('returns 404 when the order does not exist', async () => {
     const { service } = makeService({ order: null })
     const result = await service.getQualityVideos('user-1', 'missing')

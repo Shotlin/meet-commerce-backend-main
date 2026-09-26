@@ -762,6 +762,6 @@ export class OrdersService {
       }
     })
 
-    return { success: true, orderId, items: results }
+    return { success: true, orderId, orderNumber: order.order_number, items: results }
   }
 }
