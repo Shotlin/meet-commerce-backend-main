@@ -136,6 +136,7 @@ export class CategoriesService {
       groupOptions: filters.groupOptions === true || filters.groupOptions === 'true',
       allocatedShopIds,
       categoryType: category.category_type,
+      priceMode: filters.priceMode === 'wholesale' ? 'wholesale' : 'retail',
     })
 
     return {

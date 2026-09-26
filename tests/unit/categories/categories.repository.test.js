@@ -134,6 +134,134 @@ describe('CategoriesRepository.findProducts — STANDARD category / multi-catego
   })
 })
 
+describe('CategoriesRepository.findProducts — shop-scoped price/stock (the reported "category page shows the wrong store price" bug)', () => {
+  const SHOP_A = 'dddddddd-dddd-dddd-dddd-dddddddddddd'
+  const SHOP_B = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+
+  it('with no allocatedShopIds (admin/anonymous), selects the plain master columns unchanged (negative: no regression)', async () => {
+    databaseMock.query.mockResolvedValueOnce({ rows: [], rowCount: 0 })
+    databaseMock.query.mockResolvedValueOnce({ rows: [{ total: 0 }], rowCount: 1 })
+
+    const repo = new CategoriesRepository()
+    await repo.findProducts(CATEGORY_ID, { limit: 20, offset: 0, categoryType: 'STANDARD' })
+
+    const [dataSql] = databaseMock.query.mock.calls[0]
+    expect(dataSql).toMatch(/p\.price AS price/)
+    expect(dataSql).toMatch(/p\.sale_price AS sale_price/)
+    expect(dataSql).toMatch(/p\.stock_quantity AS stock_quantity/)
+    expect(dataSql).not.toMatch(/LEFT JOIN LATERAL/)
+  })
+
+  it('with allocatedShopIds, resolves price/sale_price/stock from the shop_products LATERAL join, never the bare master columns (the actual bug)', async () => {
+    databaseMock.query.mockResolvedValueOnce({ rows: [], rowCount: 0 })
+    databaseMock.query.mockResolvedValueOnce({ rows: [{ total: 0 }], rowCount: 1 })
+
+    const repo = new CategoriesRepository()
+    await repo.findProducts(CATEGORY_ID, {
+      limit: 20,
+      offset: 0,
+      categoryType: 'STANDARD',
+      allocatedShopIds: [SHOP_A],
+    })
+
+    const [dataSql, dataParams] = databaseMock.query.mock.calls[0]
+    expect(dataSql).toMatch(/LEFT JOIN LATERAL/)
+    expect(dataSql).toMatch(/COALESCE\(shop_price\.sp_price, p\.price\) AS price/)
+    expect(dataSql).toMatch(/shop_price\.sp_sale_price AS sale_price/)
+    expect(dataSql).toMatch(/COALESCE\(shop_price\.sp_stock_quantity, p\.stock_quantity\) AS stock_quantity/)
+    // The visibility EXISTS check and the price LATERAL join are two
+    // separate uses of allocatedShopIds — both must be bound as real
+    // query params (this is the exact bug: previously only the EXISTS
+    // check used allocatedShopIds, so the price was never actually
+    // resolved per-shop even though visibility filtering was correct).
+    expect(dataParams.filter((p) => Array.isArray(p) && p[0] === SHOP_A)).toHaveLength(2)
+  })
+
+  it('inStock now filters on the shop-scoped stock expression, not the master column, when scoped', async () => {
+    databaseMock.query.mockResolvedValueOnce({ rows: [], rowCount: 0 })
+    databaseMock.query.mockResolvedValueOnce({ rows: [{ total: 0 }], rowCount: 1 })
+
+    const repo = new CategoriesRepository()
+    await repo.findProducts(CATEGORY_ID, {
+      limit: 20,
+      offset: 0,
+      categoryType: 'STANDARD',
+      allocatedShopIds: [SHOP_A],
+      inStock: true,
+    })
+
+    const [dataSql] = databaseMock.query.mock.calls[0]
+    expect(dataSql).toMatch(/COALESCE\(shop_price\.sp_stock_quantity, p\.stock_quantity\) > 0/)
+    expect(dataSql).not.toMatch(/\bp\.stock_quantity > 0\b/)
+  })
+
+  it('wholesale priceMode resolves from sp_wholesale_price, falling back through the same chain as products.repository.js', async () => {
+    databaseMock.query.mockResolvedValueOnce({ rows: [], rowCount: 0 })
+    databaseMock.query.mockResolvedValueOnce({ rows: [{ total: 0 }], rowCount: 1 })
+
+    const repo = new CategoriesRepository()
+    await repo.findProducts(CATEGORY_ID, {
+      limit: 20,
+      offset: 0,
+      categoryType: 'STANDARD',
+      allocatedShopIds: [SHOP_A],
+      priceMode: 'wholesale',
+    })
+
+    const [dataSql] = databaseMock.query.mock.calls[0]
+    expect(dataSql).toMatch(
+      /COALESCE\(shop_price\.sp_wholesale_price, p\.wholesale_price, shop_price\.sp_price, p\.price\) AS price/
+    )
+    // Wholesale has no strike-through sale price — a flat admin-set price only.
+    expect(dataSql).toMatch(/NULL AS sale_price/)
+  })
+
+  it('the LATERAL join text is present in every query that shares the params array (count queries too) — a future param/placeholder count mismatch would throw at the real Postgres driver even though this mock cannot catch it, so this pins the fix in place', async () => {
+    databaseMock.query.mockResolvedValueOnce({ rows: [], rowCount: 0 })
+    databaseMock.query.mockResolvedValueOnce({ rows: [{ total: 0 }], rowCount: 1 })
+
+    const repo = new CategoriesRepository()
+    await repo.findProducts(CATEGORY_ID, {
+      limit: 20,
+      offset: 0,
+      categoryType: 'STANDARD',
+      allocatedShopIds: [SHOP_A, SHOP_B],
+    })
+
+    const [dataSql, dataParams] = databaseMock.query.mock.calls[0]
+    const [countSql, countParams] = databaseMock.query.mock.calls[1]
+    expect(countSql).toMatch(/LEFT JOIN LATERAL/)
+    // Every placeholder referenced in each query text must have a
+    // corresponding entry in that call's own params array.
+    const maxPlaceholder = (sql) => {
+      const matches = [...sql.matchAll(/\$(\d+)/g)].map((m) => Number(m[1]))
+      return matches.length ? Math.max(...matches) : 0
+    }
+    expect(dataParams.length).toBeGreaterThanOrEqual(maxPlaceholder(dataSql))
+    expect(countParams.length).toBeGreaterThanOrEqual(maxPlaceholder(countSql))
+  })
+
+  it('groupOptions=true also resolves shop-scoped price/stock (both the ranked data query and its count query)', async () => {
+    databaseMock.query.mockResolvedValueOnce({ rows: [], rowCount: 0 })
+    databaseMock.query.mockResolvedValueOnce({ rows: [{ total: 0 }], rowCount: 1 })
+
+    const repo = new CategoriesRepository()
+    await repo.findProducts(CATEGORY_ID, {
+      limit: 20,
+      offset: 0,
+      categoryType: 'STANDARD',
+      allocatedShopIds: [SHOP_A],
+      groupOptions: true,
+    })
+
+    const [dataSql] = databaseMock.query.mock.calls[0]
+    const [countSql] = databaseMock.query.mock.calls[1]
+    expect(dataSql).toMatch(/COALESCE\(shop_price\.sp_price, p\.price\) AS price/)
+    expect(dataSql).toMatch(/LEFT JOIN LATERAL/)
+    expect(countSql).toMatch(/LEFT JOIN LATERAL/)
+  })
+})
+
 describe('CategoriesRepository.setCategoryProducts — transactional replace (positive + negative)', () => {
   it('deletes existing membership then inserts the new list with sequential ranks, then commits', async () => {
     clientMock.query.mockResolvedValue({ rows: [], rowCount: 0 })

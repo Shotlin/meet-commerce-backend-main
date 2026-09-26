@@ -80,6 +80,50 @@ describe('CategoriesService.getProducts — passes resolved category_type throug
   })
 })
 
+describe('CategoriesService.getProducts — priceMode threading (the "category page shows the wrong store price" fix)', () => {
+  it('defaults to retail when no priceMode filter is given', async () => {
+    const repo = makeRepoMock({
+      findById: vi.fn().mockResolvedValue({ id: STANDARD_ID, category_type: 'STANDARD' }),
+    })
+    const service = new CategoriesService(repo, { allocationService: { getShopIdsForUser: vi.fn() } })
+
+    await service.getProducts(STANDARD_ID, {})
+
+    expect(repo.findProducts).toHaveBeenCalledWith(
+      STANDARD_ID,
+      expect.objectContaining({ priceMode: 'retail' })
+    )
+  })
+
+  it('forwards an explicit wholesale priceMode', async () => {
+    const repo = makeRepoMock({
+      findById: vi.fn().mockResolvedValue({ id: STANDARD_ID, category_type: 'STANDARD' }),
+    })
+    const service = new CategoriesService(repo, { allocationService: { getShopIdsForUser: vi.fn() } })
+
+    await service.getProducts(STANDARD_ID, { priceMode: 'wholesale' })
+
+    expect(repo.findProducts).toHaveBeenCalledWith(
+      STANDARD_ID,
+      expect.objectContaining({ priceMode: 'wholesale' })
+    )
+  })
+
+  it('an unrecognized priceMode value falls back to retail rather than passing it through unchecked', async () => {
+    const repo = makeRepoMock({
+      findById: vi.fn().mockResolvedValue({ id: STANDARD_ID, category_type: 'STANDARD' }),
+    })
+    const service = new CategoriesService(repo, { allocationService: { getShopIdsForUser: vi.fn() } })
+
+    await service.getProducts(STANDARD_ID, { priceMode: 'not-a-real-mode' })
+
+    expect(repo.findProducts).toHaveBeenCalledWith(
+      STANDARD_ID,
+      expect.objectContaining({ priceMode: 'retail' })
+    )
+  })
+})
+
 describe('CategoriesService.setCategoryProducts — validation (positive + negative)', () => {
   it('returns not-found when the category does not exist (negative)', async () => {
     const repo = makeRepoMock({ findById: vi.fn().mockResolvedValue(null) })

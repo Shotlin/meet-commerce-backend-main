@@ -75,6 +75,7 @@ export const getCategoryProductsSchema = {
       sort: { type: 'string', enum: ['price_asc', 'price_desc', 'newest', 'popular'] },
       inStock: { type: 'boolean' },
       groupOptions: { type: 'boolean', default: false },
+      priceMode: { type: 'string', enum: ['retail', 'wholesale'], default: 'retail' },
     },
   },
 }

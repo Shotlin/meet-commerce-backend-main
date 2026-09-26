@@ -1,4 +1,5 @@
 import { query, getClient } from '../../config/database.js'
+import { buildShopPriceJoin } from '../products/products.repository.js'
 
 /**
  * Product count for a category, counting BOTH a product's primary
@@ -287,7 +288,16 @@ export class CategoriesRepository {
    */
   async findProducts(
     categoryId,
-    { limit, offset, sort, inStock, groupOptions = false, allocatedShopIds = null, categoryType = 'STANDARD' }
+    {
+      limit,
+      offset,
+      sort,
+      inStock,
+      groupOptions = false,
+      allocatedShopIds = null,
+      categoryType = 'STANDARD',
+      priceMode = 'retail',
+    }
   ) {
     const isBundle = categoryType === 'BUNDLE'
     const conditions = ['p.is_active = true']
@@ -297,10 +307,6 @@ export class CategoriesRepository {
     conditions.push(
       isBundle ? 'cp.category_id IS NOT NULL' : '(p.category_id = $1 OR cp.category_id IS NOT NULL)'
     )
-
-    if (inStock) {
-      conditions.push('p.stock_quantity > 0')
-    }
 
     // Customer shop-allocation visibility (additive — only when scoped).
     if (Array.isArray(allocatedShopIds)) {
@@ -321,6 +327,26 @@ export class CategoriesRepository {
         )`)
         paramIdx++
       }
+    }
+
+    // Customer-facing price/stock must be the shop's own `shop_products`
+    // listing, never the master `products.price`/`stock_quantity` — the
+    // EXISTS check above only gates VISIBILITY (does some allocated shop
+    // carry this product at all); it was never used to pick which shop's
+    // price to actually show. Every other customer-facing product read
+    // (products.repository.js#findMany/findById) already resolves through
+    // this exact helper — this endpoint was the one path left showing the
+    // admin/master catalogue price regardless of the customer's shop, so a
+    // dashboard price change for one shop never appeared here no matter how
+    // fresh the fetch was. See buildShopPriceJoin()'s own docstring.
+    const shopPrice = buildShopPriceJoin(allocatedShopIds, params, paramIdx, priceMode)
+    paramIdx = shopPrice.nextIdx
+
+    // Matches findMany()'s own inStock handling: the customer's shop may
+    // carry a different quantity than the master catalog row, so "in stock"
+    // must mean in stock at the shop this response is actually scoped to.
+    if (inStock) {
+      conditions.push(`${shopPrice.stockExpr} > 0`)
     }
 
     // Two equivalent ORDER BY clauses per sort choice: `inner` uses real
@@ -358,7 +384,9 @@ export class CategoriesRepository {
          AND sib.is_active = true), 1)`
 
     const selectCols = `
-      p.id, p.name, p.slug, p.price, p.sale_price, p.stock_quantity,
+      p.id, p.name, p.slug,
+      ${shopPrice.priceExpr} AS price, ${shopPrice.salePriceExpr} AS sale_price,
+      ${shopPrice.stockExpr} AS stock_quantity,
       p.category_id, p.unit, p.thumbnail_url, p.is_featured, p.total_sold,
       p.product_family_id, p.option_label, p.option_sort_order,
       p.is_default_option, p.food_type, p.origin_tag,
@@ -379,6 +407,7 @@ export class CategoriesRepository {
           FROM products p
           LEFT JOIN product_families pf ON pf.id = p.product_family_id
           ${categoryProductsJoin}
+          ${shopPrice.joinSql}
           WHERE ${where}
         )
         SELECT id, name, slug, price, sale_price, stock_quantity, category_id,
@@ -404,6 +433,7 @@ export class CategoriesRepository {
             ) AS rn
           FROM products p
           ${categoryProductsJoin}
+          ${shopPrice.joinSql}
           WHERE ${where}
         )
         SELECT COUNT(*)::int AS total FROM ranked WHERE rn = 1`,
@@ -418,6 +448,7 @@ export class CategoriesRepository {
        FROM products p
        LEFT JOIN product_families pf ON pf.id = p.product_family_id
        ${categoryProductsJoin}
+       ${shopPrice.joinSql}
        WHERE ${where}
        ORDER BY ${orderSpec.inner}
        LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
@@ -428,6 +459,7 @@ export class CategoriesRepository {
       `SELECT COUNT(*)::int AS total
        FROM products p
        ${categoryProductsJoin}
+       ${shopPrice.joinSql}
        WHERE ${where}`,
       params
     )

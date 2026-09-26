@@ -37,9 +37,12 @@ export class CategoriesController {
     // with none ({shopIds: []}), or null for staff/admin (unscoped). A guest
     // used to get null here — i.e. the whole master catalogue.
     const customerContext = await resolveCustomerContext(request)
+    // Same priceMode convention as products.controller.js — mobile's
+    // ApiInterceptor sends this on every storefront request.
+    const priceMode = request.query.priceMode === 'wholesale' ? 'wholesale' : 'retail'
     const result = await this.service.getProducts(
       request.params.id,
-      request.query,
+      { ...request.query, priceMode },
       customerContext
     )
     if (!result) {
