@@ -7,6 +7,7 @@ import {
   shopProductIdParamSchema,
   shopProductRouteParamsSchema,
   adjustStockSchema,
+  createManualInventoryLotSchema,
   bulkPriceUpdateSchema,
   listStockMovementsQuerySchema,
   approveShopProductSchema,
@@ -356,6 +357,46 @@ export class ShopProductsController {
           'Stock adjusted'
         )
       )
+  }
+
+  // ────────────────────────────────────────────────────────
+  // POST /api/v1/shops/:shopId/products/:productId/inventory-lots/manual
+  // Manual vendor-batch backfill (see ShopProductsService#createManualInventoryLot)
+  // ────────────────────────────────────────────────────────
+  async createManualInventoryLot(request, reply) {
+    const shopId = request.shopId || request.params?.shopId
+    if (!shopId) return this._missingShopReply(reply)
+
+    const paramsParsed = shopProductRouteParamsSchema.safeParse(request.params)
+    if (!paramsParsed.success) {
+      return reply
+        .code(400)
+        .send(error(this._formatZodErrors(paramsParsed.error), 'VALIDATION_ERROR'))
+    }
+
+    const bodyParsed = createManualInventoryLotSchema.safeParse(request.body)
+    if (!bodyParsed.success) {
+      return reply
+        .code(400)
+        .send(error(this._formatZodErrors(bodyParsed.error), 'VALIDATION_ERROR'))
+    }
+
+    const result = await this.service.createManualInventoryLot(
+      paramsParsed.data.shopId,
+      paramsParsed.data.productId,
+      bodyParsed.data,
+      this._actor(request)
+    )
+
+    if (!result.success) {
+      return reply
+        .code(this._statusForCode(result.code))
+        .send(error(result.message, result.code))
+    }
+
+    return reply
+      .code(201)
+      .send(success(result.data, 'Vendor batch backfilled'))
   }
 
   // ────────────────────────────────────────────────────────

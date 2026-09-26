@@ -1,4 +1,5 @@
 import { query, getClient } from '../../../config/database.js'
+import { redis } from '../../../config/redis.js'
 import { OPEN_ASSIGNMENT_STATUSES, sqlInList } from '../../../constants/delivery-statuses.js'
 
 export class AdminRidersRepository {
@@ -133,11 +134,36 @@ export class AdminRidersRepository {
   }
 
   async toggleSuspend(riderId, suspended) {
-    const { rows: [user] } = await query(
-      'UPDATE users SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING id, name, is_active',
-      [!suspended, riderId]
-    )
-    return user
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const { rows: [user] } = await client.query(
+        'UPDATE users SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING id, name, is_active',
+        [!suspended, riderId]
+      )
+      if (suspended && user) {
+        // Big Phase 17 consistency: a suspended rider must not linger on
+        // the live map or in the dispatch pool. Force offline and drop
+        // the location cache in the same transaction as the suspension.
+        await client.query(
+          `UPDATE rider_profiles SET is_online = false, updated_at = NOW()
+           WHERE user_id = $1 AND is_online = true`,
+          [riderId]
+        )
+      }
+      await client.query('COMMIT')
+      if (suspended && user) {
+        // Redis lives outside the transaction — clear the cached fix
+        // after commit so the live map loses them immediately.
+        await redis.del(`rider:location:${riderId}`)
+      }
+      return user
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
   }
 
   async updateCommission(riderId, rate) {

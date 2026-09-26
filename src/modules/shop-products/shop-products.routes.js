@@ -323,6 +323,43 @@ export async function shopProductsNestedRoutes(fastify) {
     controller.adjustStock.bind(controller)
   )
 
+  // POST /:productId/inventory-lots/manual — backfill a vendor batch
+  // (vendor name, quantity, expiry, optional quality video) for stock that
+  // never came through the real Vendor Procurement receiving pipeline.
+  // Same permission/rate-limit posture as adjust-stock (a manual data-entry
+  // surface, not a high-frequency operator action).
+  fastify.post(
+    '/:productId/inventory-lots/manual',
+    {
+      schema: {
+        tags: ['Shop Products'],
+        summary: 'Manually backfill a vendor batch for a shop product',
+        security: [{ bearerAuth: [] }],
+        params: {
+          type: 'object',
+          required: ['shopId', 'productId'],
+          properties: {
+            shopId: { type: 'string', format: 'uuid' },
+            productId: { type: 'string', format: 'uuid' },
+          },
+        },
+      },
+      preHandler: [
+        fastify.authenticate,
+        shopScope,
+        requirePermission('shop_products.update'),
+      ],
+      config: {
+        requiredPermission: 'shop_products.update',
+        rateLimit: {
+          max: 30,
+          timeWindow: '1 minute',
+        },
+      },
+    },
+    controller.createManualInventoryLot.bind(controller)
+  )
+
   // POST /bulk-price-update — up to 500 items in one tx, price-only
   // (no stock_movements rows written). Rate-limited to bound the
   // long-lock surface — bulk operations are deliberately throttled

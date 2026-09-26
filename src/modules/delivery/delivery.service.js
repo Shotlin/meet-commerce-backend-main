@@ -6,6 +6,7 @@ import { NotificationsService } from '../notifications/notifications.service.js'
 import { buildCustomerOrderEventNotification } from '../notifications/customer-order-event.helper.js'
 import { UploadsService } from '../uploads/uploads.service.js'
 import { CashbackService } from '../cashback/cashback.service.js'
+import { emit as emitAudit } from '../../utils/audit-log.js'
 
 const INLINE_AUTO_ASSIGN_IN_NON_PROD =
   process.env.AUTO_ASSIGN_INLINE === 'true' ||
@@ -821,6 +822,24 @@ export class DeliveryService {
         code: 'COLLECTION_ALREADY_RECORDED',
       }
     }
+    // Blueprint §17: money movements are auditable. Fire-and-forget —
+    // the collection row is already committed; an audit failure must
+    // never fail the rider's action.
+    emitAudit('collection_recorded', {
+      actor_user_id: riderId,
+      actor_role: 'RIDER',
+      actor_shop_id: null,
+      target_type: 'order',
+      target_id: orderId,
+      before: null,
+      after: {
+        amount_due: amountDue,
+        cash_amount: cash,
+        upi_amount: upi,
+        idempotency_key: idempotencyKey || `collection-${orderId}`,
+        replayed: result.replayed,
+      },
+    })
     return { collection: result.row, replayed: result.replayed }
   }
 

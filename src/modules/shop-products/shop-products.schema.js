@@ -144,6 +144,24 @@ export const adjustStockSchema = z.object({
   reason: z.string().min(5).max(500),
 })
 
+// ─── MANUAL INVENTORY LOT BACKFILL ───────────────────────
+// POST /api/v1/shops/:shopId/products/:productId/inventory-lots/manual
+// Records a vendor batch (name, quantity, expiry, optional video) for stock
+// that never came through the real Vendor Procurement receiving pipeline
+// (§7.5.1) — the lot itself is always tagged `is_manual_entry`, so it can
+// never be mistaken for a real vendor-procurement lot downstream.
+export const createManualInventoryLotSchema = z.object({
+  vendor_name: z.string().trim().min(2).max(255),
+  quantity: z.number().positive().max(STOCK_MAX),
+  expiry_date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'expiry_date must be YYYY-MM-DD'),
+  video_url: z.string().trim().url().max(2048).optional().or(z.literal('')),
+  batch_reference: z.string().trim().max(50).optional().or(z.literal('')),
+  notes: z.string().trim().max(500).optional().or(z.literal('')),
+  also_add_to_stock: z.boolean().optional().default(false),
+})
+
 // ─── BULK PRICE UPDATE (R23.12) ──────────────────────────
 // POST /api/v1/shops/:shopId/products/bulk-price-update
 // At least one of price/sale_price/cost_price MUST be provided per item;

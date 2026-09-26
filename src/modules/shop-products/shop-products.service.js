@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { getClient } from '../../config/database.js'
 import { cacheGet, cacheSet, cacheDeletePattern } from '../../utils/cache.js'
 import { logger } from '../../config/logger.js'
@@ -629,6 +630,160 @@ export class ShopProductsService {
     )
 
     return { shopProduct, lots, lotQuantityTotal }
+  }
+
+  /**
+   * Manually backfill a vendor-batch record for a shop product whose stock
+   * never came through the real Vendor Procurement receiving pipeline
+   * (§7.5.1) — e.g. stock typed in by hand before a vendor relationship was
+   * formalized as a real `vendors` row, or pre-dating the procurement
+   * system entirely. Creates a real `inventory_lots` row (tagged
+   * `is_manual_entry`, carrying the vendor name / optional video directly
+   * on the row rather than through a procurement_receipt_item join — see
+   * InventoryRepository#createManualLot) and — only if the caller opts in
+   * — applies the same quantity as a `MANUAL_ADJUSTMENT` stock delta in the
+   * same transaction, so the lot and the stock bump commit or roll back
+   * together. Leaving `also_add_to_stock` off lets an admin attach batch
+   * provenance to stock that's already correctly set, without double-
+   * counting it.
+   *
+   * Unlike the read-only `getInventoryLots`, this DOES lazily create the
+   * shop's derived warehouse (`ensureShopWarehouse`) — an admin backfilling
+   * a batch is explicitly asking for one to exist.
+   *
+   * @param {string} shopId
+   * @param {string} shopProductId
+   * @param {{vendor_name:string, quantity:number, expiry_date:string, video_url?:string, batch_reference?:string, notes?:string, also_add_to_stock?:boolean}} body
+   * @param {object} actor
+   * @returns {Promise<{success:boolean, data?:object, message?:string, code?:string}>}
+   */
+  async createManualInventoryLot(shopId, shopProductId, body, actor) {
+    const auth = this.authorizeMutation(actor)
+    if (!auth.ok) return { success: false, message: auth.message, code: auth.code }
+
+    const shopProduct = await this.repo.findById(shopProductId, shopId)
+    if (!shopProduct) {
+      return { success: false, message: 'Shop product not found', code: ERROR_CODES.PRODUCT_NOT_FOUND }
+    }
+
+    const vendorProcurementRepo = new VendorProcurementRepository()
+    const warehouseId = await vendorProcurementRepo.ensureShopWarehouse(shopId)
+    const inventoryRepo = new InventoryRepository()
+
+    const vendorName = body.vendor_name.trim()
+    const referenceLabel = (body.batch_reference || '')
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9-]/g, '')
+      .slice(0, 30)
+    const batchNumber = `MANUAL-${referenceLabel ? `${referenceLabel}-` : ''}${randomUUID().slice(0, 8).toUpperCase()}`
+
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+
+      const lot = await inventoryRepo.createManualLot(client, {
+        warehouseId,
+        productId: shopProduct.product_id,
+        batchNumber,
+        expiryDate: body.expiry_date,
+        quantity: body.quantity,
+        vendorName,
+        videoUrl: body.video_url || null,
+        notes: body.notes || null,
+        createdBy: actor.id || null,
+      })
+
+      let updatedShopProduct = shopProduct
+      let movement = null
+      if (body.also_add_to_stock) {
+        try {
+          const result = await this.repo.applyStockChange(client, {
+            shopProductId,
+            delta: body.quantity,
+            type: 'MANUAL_ADJUSTMENT',
+            reason: body.notes?.trim() || `Vendor batch backfill — ${vendorName}`,
+            actor: { userId: actor.id || null, shopRole: actor.shopRole || null },
+            source: 'DASHBOARD',
+            metadata: { ip: actor.ip || null, manual_lot_id: lot.id },
+            orderId: null,
+          })
+          updatedShopProduct = result.stockProduct
+          movement = result.movement
+        } catch (err) {
+          await client.query('ROLLBACK')
+          if (err && err.code === ERROR_CODES.STOCK_NEGATIVE_FORBIDDEN) {
+            return { success: false, message: err.message, code: ERROR_CODES.STOCK_NEGATIVE_FORBIDDEN }
+          }
+          throw err
+        }
+      }
+
+      await emitAuditInTx(client, 'inventory_lot_manual_backfill', {
+        actor_user_id: actor.id || null,
+        actor_role: actor.platformRole || actor.shopRole || actor.role || null,
+        actor_shop_id: shopId,
+        target_type: 'inventory_lot',
+        target_id: lot.id,
+        before: null,
+        after: {
+          shop_product_id: shopProductId,
+          product_id: shopProduct.product_id,
+          vendor_name: vendorName,
+          quantity: Number(lot.quantity_on_hand),
+          also_added_to_stock: Boolean(body.also_add_to_stock),
+        },
+        ip_address: actor.ip || null,
+        user_agent: actor.userAgent || null,
+      })
+
+      await client.query('COMMIT')
+
+      logger.info(
+        {
+          userId: actor.id,
+          shopId,
+          shopProductId,
+          lotId: lot.id,
+          action: 'inventory_lot_manual_backfill',
+          alsoAddedToStock: Boolean(body.also_add_to_stock),
+        },
+        'Vendor batch manually backfilled'
+      )
+
+      if (body.also_add_to_stock && movement) {
+        try {
+          await this.handleStockTransitionSideEffects({
+            shopId,
+            shopProduct: updatedShopProduct,
+            prevQty: Number(movement.quantity_before),
+            newQty: Number(movement.quantity_after),
+            lowStockThreshold: Number(updatedShopProduct.low_stock_threshold),
+          })
+        } catch (sideErr) {
+          logger.error(
+            {
+              err: sideErr.message,
+              shopId,
+              shopProductId,
+              action: 'stock_transition_side_effects',
+            },
+            'Stock transition side effects failed after manual lot backfill (transaction already committed)'
+          )
+        }
+      }
+
+      return { success: true, data: { lot, shopProduct: updatedShopProduct, movement } }
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK')
+      } catch {
+        /* ignore */
+      }
+      throw err
+    } finally {
+      client.release()
+    }
   }
 
   /**
