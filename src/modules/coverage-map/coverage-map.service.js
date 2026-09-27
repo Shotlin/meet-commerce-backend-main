@@ -54,6 +54,8 @@ export class CoverageMapService {
           state: shop.state,
           pincode: shop.pincode,
           isActive: shop.is_active,
+          deliveryRadiusKm: shop.delivery_radius_km != null ? Number(shop.delivery_radius_km) : null,
+          pincodeOnly: Boolean(shop.pincode_only),
         },
         serviceablePincodes,
         uncoveredPincodes,

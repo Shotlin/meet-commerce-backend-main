@@ -107,8 +107,8 @@ export class AdminRidersService {
     return doc
   }
 
-  async getLiveLocations() {
-    return repo.getLiveLocations()
+  async getLiveLocations(shopId = null) {
+    return repo.getLiveLocations(shopId)
   }
 
   // ─── COD COLLECTIONS (Big Phase 14) ───

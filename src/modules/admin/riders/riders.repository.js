@@ -226,17 +226,31 @@ export class AdminRidersRepository {
     return doc
   }
 
-  async getLiveLocations() {
+  /**
+   * @param {string|null} shopId - when given (the Coverage Map's use), only
+   * riders with an OPEN delivery assignment for an order belonging to this
+   * shop are returned (INNER JOIN via orders.shop_id). With no shopId (the
+   * Delivery page's fleet-wide view, unchanged), every online rider comes
+   * back regardless of what they're delivering or for whom.
+   */
+  async getLiveLocations(shopId = null) {
+    const assignmentJoin = shopId
+      ? `JOIN delivery_assignments da ON da.rider_id = u.id
+           AND da.status IN (${sqlInList(OPEN_ASSIGNMENT_STATUSES)})
+         JOIN orders o ON o.id = da.order_id AND o.shop_id = $1`
+      : `LEFT JOIN delivery_assignments da ON da.rider_id = u.id
+           AND da.status IN (${sqlInList(OPEN_ASSIGNMENT_STATUSES)})`
+    const params = shopId ? [shopId] : []
     const { rows } = await query(
       `SELECT u.id, u.name, u.phone, rp.current_lat, rp.current_lng,
-              rp.vehicle_type, rp.is_online,
+              rp.vehicle_type, rp.is_online, rp.location_updated_at,
               da.order_id, da.status AS delivery_status
        FROM users u
        JOIN rider_profiles rp ON rp.user_id = u.id
-       LEFT JOIN delivery_assignments da ON da.rider_id = u.id
-         AND da.status IN (${sqlInList(OPEN_ASSIGNMENT_STATUSES)})
+       ${assignmentJoin}
        WHERE rp.is_online = true AND u.is_active = true
-       ORDER BY u.name`
+       ORDER BY u.name`,
+      params
     )
     return rows
   }

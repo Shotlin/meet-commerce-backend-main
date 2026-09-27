@@ -49,10 +49,10 @@ export class CoverageMapRepository {
     const nameById = new Map(users.map((u) => [u.id, u.name]))
 
     const { rows: activeOrderRows } = await query(
-      `SELECT DISTINCT user_id FROM orders WHERE user_id = ANY($1::uuid[]) AND status = ANY($2::text[])`,
+      `SELECT DISTINCT customer_id FROM orders WHERE customer_id = ANY($1::uuid[]) AND status = ANY($2::text[])`,
       [userIds, ACTIVE_ORDER_STATUSES]
     )
-    const hasActiveOrder = new Set(activeOrderRows.map((r) => r.user_id))
+    const hasActiveOrder = new Set(activeOrderRows.map((r) => r.customer_id))
 
     return withCoords.map((p) => ({
       userId: p.user_id,

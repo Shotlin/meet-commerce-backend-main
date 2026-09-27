@@ -21,6 +21,8 @@ const coverageResponse = {
             state: { type: 'string' },
             pincode: { type: 'string' },
             isActive: { type: 'boolean' },
+            deliveryRadiusKm: { type: ['number', 'null'] },
+            pincodeOnly: { type: 'boolean' },
           },
         },
         serviceablePincodes: { type: 'array', items: { type: 'string' } },

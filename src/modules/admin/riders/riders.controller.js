@@ -123,7 +123,10 @@ export class AdminRidersController {
   }
 
   async getLiveLocations(request, reply) {
-    const data = await svc.getLiveLocations()
+    // Optional shopId — the Coverage Map only wants riders currently
+    // delivering for ONE shop; DeliveryPage's own fleet view calls this
+    // with no shopId and keeps getting every online rider, unchanged.
+    const data = await svc.getLiveLocations(request.query.shopId || null)
     return success(data, 'Live locations fetched')
   }
 
