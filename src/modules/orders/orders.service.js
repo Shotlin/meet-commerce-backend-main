@@ -48,6 +48,7 @@ export class OrdersService {
   constructor(repository, quoteRepository, deps = {}) {
     this.repository = repository
     this.quoteRepository = quoteRepository
+    this.fastify = deps?.fastify || null
     this.storeStatusService = deps?.storeStatusService || null
     this.deliveryCalendarService = deps?.deliveryCalendarService || null
     this.paymentSettingsService = deps?.paymentSettingsService || deps?.configService || null
@@ -320,6 +321,31 @@ export class OrdersService {
             logger.warn({ err: err.message, orderId: order.id }, 'Coupon usage recording failed at placement (non-critical)')
           }
         }
+      }
+    }
+
+    // Real-time dashboard alert — a genuinely confirmed order (COD is
+    // confirmed the moment it's placed, money collected on delivery; an
+    // ONLINE order fully covered by wallet needs no further Razorpay step
+    // either) shows up on the dashboard instantly instead of only after the
+    // next poll/manual refresh. A still-outstanding ONLINE order is
+    // deliberately NOT emitted here — it gets this same event later, once
+    // real money has actually moved, from `payments.service.js`'s own
+    // `completeVerifiedPayment` (see that file's `emitDashboardNewOrder`
+    // call) — so an abandoned/failed payment attempt never alerts anyone.
+    for (const order of created) {
+      if (order.paymentMethod !== 'COD' && order.paymentStatus !== 'PAID') continue
+      try {
+        this.fastify?.emitDashboardNewOrder?.({
+          id: order.id,
+          order_number: order.orderNumber,
+          total: order.totalAmount,
+          payment_method: order.paymentMethod,
+          shop_id: order.shopId,
+          created_at: order.createdAt,
+        })
+      } catch (err) {
+        logger.warn({ err: err.message, orderId: order.id }, 'Dashboard new-order socket emit failed (non-critical)')
       }
     }
 

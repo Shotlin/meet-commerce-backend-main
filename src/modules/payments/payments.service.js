@@ -436,6 +436,7 @@ export class PaymentsService {
         total: order.total_payable,
         payment_method: 'ONLINE',
         delivery_mode: order.delivery_mode,
+        shop_id: order.shop_id,
         created_at: order.created_at,
       })
     } catch (err) {

@@ -534,6 +534,7 @@ export class WalletService {
           total: order.totalAmount,
           payment_method: 'WALLET',
           delivery_mode: order.deliveryMode,
+          shop_id: order.shopId,
           created_at: order.createdAt,
         })
       } catch (notifErr) {

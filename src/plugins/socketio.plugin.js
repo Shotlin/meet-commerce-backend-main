@@ -306,9 +306,16 @@ async function socketioPlugin(fastify) {
   })
 
   // ─── ADMIN DASHBOARD EVENTS ──────────────────────────
-  // Helper: emit new order alert to admin dashboard
+  // Helper: emit new order alert to admin dashboard. Also reaches
+  // shop:{shopId} — a branch/shop-staff dashboard session only ever joins
+  // that room (never admin:dashboard, which is HQ-only, see the connection
+  // handler above), so without this a store-level user would never see a
+  // real-time alert for their own branch's orders at all.
   fastify.decorate('emitDashboardNewOrder', (order) => {
     io.to('admin:dashboard').emit('dashboard:new_order', order)
+    if (order?.shop_id) {
+      io.to(`shop:${order.shop_id}`).emit('dashboard:new_order', order)
+    }
   })
 
   // Helper: emit low stock alert to admin dashboard

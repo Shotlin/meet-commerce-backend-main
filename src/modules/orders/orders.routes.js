@@ -17,6 +17,7 @@ export async function ordersRoutes(fastify) {
   const quoteRepository = new CartQuoteRepository()
   const service = new OrdersService(repository, quoteRepository, {
     paymentSettingsService: new PaymentSettingsService(),
+    fastify,
   })
   const controller = new OrdersController(service)
 
