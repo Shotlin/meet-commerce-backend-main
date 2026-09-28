@@ -270,7 +270,7 @@ export class ProductsRepository {
             p.sku, p.barcode, p.low_stock_threshold, p.category_id, p.wholesale_price,
             p.product_family_id, p.option_label, p.option_sort_order,
             p.is_default_option, p.food_type, p.origin_tag, p.cut_type, p.piece_count, p.skin_type,
-            p.custom_badges, p.display_delivery_minutes,
+            p.custom_badges, p.display_delivery_minutes, p.cut_options, p.piece_options,
             p.avg_rating, p.rating_count, p.net_quantity,
             p.created_at,
             c.name AS category_name,
@@ -292,7 +292,7 @@ export class ProductsRepository {
                sku, barcode, low_stock_threshold, category_id,
                product_family_id, option_label, option_sort_order,
                is_default_option, food_type, origin_tag, cut_type, piece_count, skin_type,
-               custom_badges, display_delivery_minutes,
+               custom_badges, display_delivery_minutes, cut_options, piece_options,
                avg_rating, rating_count, net_quantity,
                category_name, family_name, option_count
         FROM ranked
@@ -336,7 +336,7 @@ export class ProductsRepository {
         p.sku, p.barcode, p.low_stock_threshold, p.category_id, p.wholesale_price,
         p.product_family_id, p.option_label, p.option_sort_order,
         p.is_default_option, p.food_type, p.origin_tag, p.cut_type, p.piece_count, p.skin_type,
-        p.custom_badges, p.display_delivery_minutes,
+        p.custom_badges, p.display_delivery_minutes, p.cut_options, p.piece_options,
         p.avg_rating, p.rating_count, p.net_quantity,
         c.name AS category_name,
         pf.name AS family_name,
@@ -428,7 +428,7 @@ export class ProductsRepository {
           p.total_sold,
           p.product_family_id, p.option_label, p.option_sort_order,
           p.is_default_option, p.food_type, p.origin_tag, p.cut_type, p.piece_count, p.skin_type,
-          p.custom_badges, p.display_delivery_minutes,
+          p.custom_badges, p.display_delivery_minutes, p.cut_options, p.piece_options,
           p.avg_rating, p.rating_count, p.net_quantity,
           pf.name AS family_name,
           ts_rank_cd(p.search_vector, to_tsquery('simple', $1)) AS rank,
@@ -456,7 +456,7 @@ export class ProductsRepository {
           p.total_sold,
           p.product_family_id, p.option_label, p.option_sort_order,
           p.is_default_option, p.food_type, p.origin_tag, p.cut_type, p.piece_count, p.skin_type,
-          p.custom_badges, p.display_delivery_minutes,
+          p.custom_badges, p.display_delivery_minutes, p.cut_options, p.piece_options,
           p.avg_rating, p.rating_count, p.net_quantity,
           pf.name AS family_name,
           0.1 AS rank,
@@ -496,7 +496,7 @@ export class ProductsRepository {
         total_sold,
         product_family_id, option_label, option_sort_order,
         is_default_option, food_type, origin_tag, cut_type, piece_count, skin_type,
-        custom_badges, display_delivery_minutes,
+        custom_badges, display_delivery_minutes, cut_options, piece_options,
         avg_rating, rating_count, net_quantity,
         family_name,
         rank
@@ -639,7 +639,7 @@ export class ProductsRepository {
               c.name AS category_name, p.total_sold,
               p.product_family_id, p.option_label, p.option_sort_order,
               p.is_default_option, p.food_type, p.origin_tag, p.cut_type, p.piece_count, p.skin_type,
-              p.custom_badges, p.display_delivery_minutes,
+              p.custom_badges, p.display_delivery_minutes, p.cut_options, p.piece_options,
               p.avg_rating, p.rating_count, p.net_quantity,
               pf.name AS family_name,
               COALESCE(
@@ -751,7 +751,7 @@ export class ProductsRepository {
               p.avg_rating, p.rating_count, p.is_authentic,
               p.product_family_id, p.option_label, p.option_sort_order,
               p.is_default_option, p.food_type, p.origin_tag, p.cut_type, p.piece_count, p.skin_type,
-              p.custom_badges, p.display_delivery_minutes,
+              p.custom_badges, p.display_delivery_minutes, p.cut_options, p.piece_options,
               c.name AS category_name,
               pf.name AS family_name,
               COALESCE(
@@ -801,7 +801,7 @@ export class ProductsRepository {
               p.avg_rating, p.rating_count, p.is_authentic,
               p.product_family_id, p.option_label, p.option_sort_order,
               p.is_default_option, p.food_type, p.origin_tag, p.cut_type, p.piece_count, p.skin_type,
-              p.custom_badges, p.display_delivery_minutes,
+              p.custom_badges, p.display_delivery_minutes, p.cut_options, p.piece_options,
               c.name AS category_name,
               pf.name AS family_name,
               COALESCE(
@@ -846,7 +846,7 @@ export class ProductsRepository {
               ${shopPrice.stockExpr} AS stock_quantity, p.unit, p.thumbnail_url, p.total_sold,
               p.product_family_id, p.option_label, p.option_sort_order,
               p.is_default_option, p.food_type, p.origin_tag, p.cut_type, p.piece_count, p.skin_type,
-              p.custom_badges, p.display_delivery_minutes,
+              p.custom_badges, p.display_delivery_minutes, p.cut_options, p.piece_options,
               p.avg_rating, p.rating_count, p.net_quantity,
               pf.name AS family_name
        FROM products p
@@ -926,7 +926,7 @@ export class ProductsRepository {
               c.name AS category_name,
               p.product_family_id, p.option_label, p.option_sort_order,
               p.is_default_option, p.food_type, p.origin_tag, p.cut_type, p.piece_count, p.skin_type,
-              p.custom_badges, p.display_delivery_minutes,
+              p.custom_badges, p.display_delivery_minutes, p.cut_options, p.piece_options,
               p.net_quantity,
               pf.name AS family_name
        FROM products p
@@ -977,7 +977,7 @@ export class ProductsRepository {
               p.avg_rating, p.rating_count, p.net_quantity,
               p.product_family_id, p.option_label, p.option_sort_order,
               p.is_default_option, p.food_type, p.origin_tag, p.cut_type, p.piece_count, p.skin_type,
-              p.custom_badges, p.display_delivery_minutes,
+              p.custom_badges, p.display_delivery_minutes, p.cut_options, p.piece_options,
               pf.name AS family_name
          FROM products p
          LEFT JOIN product_families pf ON pf.id = p.product_family_id
@@ -1024,7 +1024,7 @@ export class ProductsRepository {
                 p.avg_rating, p.rating_count, p.net_quantity,
                 p.product_family_id, p.option_label, p.option_sort_order,
                 p.is_default_option, p.food_type, p.origin_tag, p.cut_type, p.piece_count, p.skin_type,
-                p.custom_badges, p.display_delivery_minutes,
+                p.custom_badges, p.display_delivery_minutes, p.cut_options, p.piece_options,
                 pf.name AS family_name
            FROM products p
            LEFT JOIN product_families pf ON pf.id = p.product_family_id
@@ -1057,7 +1057,7 @@ export class ProductsRepository {
               p.stock_quantity, p.unit, p.thumbnail_url,
               p.product_family_id, p.option_label, p.option_sort_order,
               p.is_default_option, p.food_type, p.origin_tag, p.cut_type, p.piece_count, p.skin_type,
-              p.custom_badges, p.display_delivery_minutes,
+              p.custom_badges, p.display_delivery_minutes, p.cut_options, p.piece_options,
               p.avg_rating, p.rating_count, p.net_quantity,
               p.category_id, p.is_active
        FROM products p
@@ -1114,7 +1114,7 @@ export class ProductsRepository {
               p.stock_quantity, p.unit, p.thumbnail_url,
               p.product_family_id, p.option_label, p.option_sort_order,
               p.is_default_option, p.food_type, p.origin_tag, p.cut_type, p.piece_count, p.skin_type,
-              p.custom_badges, p.display_delivery_minutes,
+              p.custom_badges, p.display_delivery_minutes, p.cut_options, p.piece_options,
               p.avg_rating, p.rating_count, p.net_quantity,
               p.category_id
        FROM products p
@@ -1216,9 +1216,9 @@ export class ProductsRepository {
          vendor_name, vendor_address, vendor_fssai, return_policy,
          avg_rating, rating_count, is_authentic,
          product_family_id, option_label, option_sort_order, is_default_option,
-         food_type, origin_tag, custom_badges, display_delivery_minutes,
+         food_type, origin_tag, custom_badges, display_delivery_minutes, cut_options, piece_options,
          cut_type, piece_count, skin_type)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52)
        RETURNING id, name, slug, price, sale_price, stock_quantity, unit,
                  thumbnail_url, category_id, is_featured, is_active, sku, created_at`,
       [
@@ -1246,6 +1246,7 @@ export class ProductsRepository {
         data.foodType || 'NONE', data.originTag || 'NONE',
         JSON.stringify(data.customBadges || []),
         data.displayDeliveryMinutes || null,
+        JSON.stringify(data.cutOptions || []), JSON.stringify(data.pieceOptions || []),
         data.cutType || null, data.pieceCount || null, data.skinType || 'NONE',
       ]
     )
@@ -1334,6 +1335,14 @@ export class ProductsRepository {
     if (data.customBadges !== undefined) {
       fields.push(`custom_badges = $${idx++}`)
       params.push(JSON.stringify(data.customBadges))
+    }
+    if (data.cutOptions !== undefined) {
+      fields.push(`cut_options = $${idx++}`)
+      params.push(JSON.stringify(data.cutOptions))
+    }
+    if (data.pieceOptions !== undefined) {
+      fields.push(`piece_options = $${idx++}`)
+      params.push(JSON.stringify(data.pieceOptions))
     }
     if (data.variants !== undefined) {
       await this.saveVariants(id, data.variants)

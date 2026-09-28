@@ -111,9 +111,11 @@ export class VendorProcurementRepository {
 
   async findRequestItems(requestId) {
     const { rows } = await query(
-      `SELECT i.*, c.name AS category_name
+      `SELECT i.*, c.name AS category_name,
+              p.thumbnail_url AS product_image_url
          FROM procurement_request_items i
          JOIN categories c ON c.id = i.category_id
+         LEFT JOIN products p ON p.id = i.product_id
         WHERE i.request_id = $1
         ORDER BY i.created_at, i.id`,
       [requestId]
@@ -692,6 +694,11 @@ export class VendorProcurementRepository {
       [vendorId]
     )
 
+    const [monthlyTrend, topProducts] = await Promise.all([
+      this.getVendorMonthlyTrend(vendorId),
+      this.getVendorTopProducts(vendorId),
+    ])
+
     return {
       total_supplies: supplies.rows[0].total_supplies,
       completed_supplies: supplies.rows[0].completed_supplies,
@@ -706,7 +713,75 @@ export class VendorProcurementRepository {
       avg_rating: quality.rows[0].avg_rating,
       review_count: quality.rows[0].review_count,
       issue_count: quality.rows[0].issue_count,
+      monthly_trend: monthlyTrend,
+      top_products: topProducts,
     }
+  }
+
+  /**
+   * Last 6 months of confirmed (RECEIVED/CLOSED) supply value for this
+   * vendor, zero-filled via generate_series so a quiet month renders as a
+   * real ₹0 bar rather than a gap the chart has to guess at.
+   */
+  async getVendorMonthlyTrend(vendorId, months = 6) {
+    const { rows } = await query(
+      `SELECT
+          to_char(month_start, 'YYYY-MM') AS month,
+          to_char(month_start, 'Mon') AS label,
+          COALESCE(SUM(so.award_amount), 0) AS value
+         FROM generate_series(
+                date_trunc('month', NOW()) - ($2::int - 1) * interval '1 month',
+                date_trunc('month', NOW()),
+                interval '1 month'
+              ) AS month_start
+         LEFT JOIN procurement_supply_orders so
+                ON so.vendor_id = $1
+               AND so.deleted_at IS NULL
+               AND so.status IN ('RECEIVED', 'CLOSED')
+               AND so.received_at >= month_start
+               AND so.received_at < month_start + interval '1 month'
+        GROUP BY month_start
+        ORDER BY month_start`,
+      [vendorId, months]
+    )
+    return rows.map((row) => ({ month: row.month, label: row.label, value: row.value }))
+  }
+
+  /**
+   * Best-selling products by confirmed (RECEIVED/CLOSED) supply value —
+   * plain aggregation over agreed line totals, the same commercial basis
+   * `total_value`/`month_value` above already use. A legacy item with no
+   * `product_id` link (free-text, pre-migration-143) groups by its own
+   * item_name instead of silently dropping out.
+   */
+  async getVendorTopProducts(vendorId, limit = 5) {
+    const { rows } = await query(
+      `SELECT
+          soi.product_id,
+          COALESCE(p.name, soi.item_name) AS name,
+          p.thumbnail_url AS image_url,
+          SUM(soi.agreed_quantity) AS quantity,
+          (ARRAY_AGG(soi.unit))[1] AS unit,
+          SUM(soi.agreed_line_total) AS value
+         FROM procurement_supply_order_items soi
+         JOIN procurement_supply_orders so ON so.id = soi.supply_order_id
+         LEFT JOIN products p ON p.id = soi.product_id
+        WHERE so.vendor_id = $1
+          AND so.deleted_at IS NULL
+          AND so.status IN ('RECEIVED', 'CLOSED')
+        GROUP BY soi.product_id, COALESCE(p.name, soi.item_name), p.thumbnail_url
+        ORDER BY value DESC
+        LIMIT $2`,
+      [vendorId, limit]
+    )
+    return rows.map((row) => ({
+      product_id: row.product_id,
+      name: row.name,
+      image_url: row.image_url,
+      quantity: row.quantity,
+      unit: row.unit,
+      value: row.value,
+    }))
   }
 
   // ── Store receipt (Big Phase 13) ──────────────────────────────
@@ -873,7 +948,12 @@ export class VendorProcurementRepository {
    */
   async findVendorStatus(vendorId) {
     const { rows } = await query(
-      `SELECT id, status, is_active FROM vendors WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
+      // `name` is additive — every existing caller only ever read
+      // id/status/is_active (eligibility checks), but getVendorPerformance
+      // also builds a `{id, name, status}` vendor block from this same row,
+      // and without it the vendor app's Performance screen always fell back
+      // to its generic "Your store" placeholder instead of the real name.
+      `SELECT id, name, status, is_active FROM vendors WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
       [vendorId]
     )
     return rows[0] ?? null

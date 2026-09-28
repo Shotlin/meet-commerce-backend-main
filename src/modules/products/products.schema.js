@@ -71,6 +71,8 @@ export const listProductsSchema = {
               cut_type: { type: 'string', nullable: true },
               piece_count: { type: 'string', nullable: true },
               skin_type: { type: 'string', nullable: true },
+              cut_options: { type: 'array', items: { type: 'string' }, nullable: true },
+              piece_options: { type: 'array', items: { type: 'string' }, nullable: true },
             },
           },
         },
@@ -221,6 +223,10 @@ export const createProductSchema = {
       foodType: { type: 'string', enum: ['VEG', 'NON_VEG', 'EGG', 'NONE'], default: 'NONE' },
       originTag: { type: 'string', enum: ['IMPORTED', 'LOCAL', 'NONE'], default: 'NONE' },
       customBadges: { type: 'array', items: { type: 'string', maxLength: 50 }, default: [] },
+      // "Choose Your Cut" / "Available Pieces" — admin-typed option lists,
+      // same-SKU, purely descriptive (see migration 148). Not a rigid enum.
+      cutOptions: { type: 'array', items: { type: 'string', maxLength: 50 }, default: [] },
+      pieceOptions: { type: 'array', items: { type: 'string', maxLength: 50 }, default: [] },
       displayDeliveryMinutes: { type: 'integer', minimum: 1, maximum: 180 },
       // Meat-specific — not part of Bakaloo's own schema (see migration 114).
       cutType: { type: 'string', maxLength: 50 },
@@ -333,6 +339,10 @@ export const updateProductSchema = {
       foodType: { type: 'string', enum: ['VEG', 'NON_VEG', 'EGG', 'NONE'], default: 'NONE' },
       originTag: { type: 'string', enum: ['IMPORTED', 'LOCAL', 'NONE'], default: 'NONE' },
       customBadges: { type: 'array', items: { type: 'string', maxLength: 50 }, default: [] },
+      // "Choose Your Cut" / "Available Pieces" — admin-typed option lists,
+      // same-SKU, purely descriptive (see migration 148). Not a rigid enum.
+      cutOptions: { type: 'array', items: { type: 'string', maxLength: 50 }, default: [] },
+      pieceOptions: { type: 'array', items: { type: 'string', maxLength: 50 }, default: [] },
       displayDeliveryMinutes: { type: 'integer', minimum: 1, maximum: 180 },
       // Meat-specific — not part of Bakaloo's own schema (see migration 114).
       cutType: { type: 'string', maxLength: 50 },
