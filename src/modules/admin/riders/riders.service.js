@@ -6,10 +6,22 @@ import { emit as emitAudit } from '../../../utils/audit-log.js'
 
 const repo = new AdminRidersRepository()
 
+/**
+ * Digits-only phone normaliser, dropping a leading `91` country code when
+ * present — mirrors `auth.service.js`'s own OTP-lookup normalisation so a
+ * manager typing a number with or without the country code, spaces, or
+ * dashes still matches the stored value.
+ */
+function normalizePhone(phone) {
+  const digits = `${phone || ''}`.replace(/\D/g, '')
+  if (digits.startsWith('91') && digits.length === 12) return digits.slice(2)
+  return digits
+}
+
 export class AdminRidersService {
-  async list({ page = 1, limit = 20, search, status, sortBy, sortOrder }) {
+  async list({ page = 1, limit = 20, search, status, sortBy, sortOrder, shopId = null }) {
     const offset = (page - 1) * limit
-    return repo.findAll({ offset, limit, search, status, sortBy, sortOrder })
+    return repo.findAll({ offset, limit, search, status, sortBy, sortOrder, shopId })
   }
 
   async getDetail(riderId) {
@@ -205,6 +217,50 @@ export class AdminRidersService {
       }
       throw err
     }
+  }
+
+  /**
+   * Finds a rider by phone (shop-side "add a rider" search) and reports
+   * whether they're already assigned to [callerShopId] — the caller's
+   * own shop, or `null` for an HQ-wide search. Bounded to one exact
+   * number; never a roster browse.
+   */
+  async searchByPhone(rawPhone, callerShopId) {
+    const normalized = normalizePhone(rawPhone)
+    if (!normalized) return null
+    const rider = await repo.findByPhone(normalized)
+    if (!rider) return null
+    const assignedToMyShop = callerShopId
+      ? await repo.hasActiveAssignment(rider.id, callerShopId)
+      : null
+    return { ...rider, assigned_to_my_shop: assignedToMyShop }
+  }
+
+  /**
+   * Assigns or unassigns a rider to/from exactly one shop — the
+   * shop-scoped counterpart to `replaceStoreAssignments`, which a
+   * shop-staff caller must never be allowed to call (it can silently
+   * deactivate assignments at OTHER shops the caller has no authority
+   * over). Returns null when the rider does not exist.
+   */
+  async setMyShopAssignment(riderId, shopId, active, actorId, ip) {
+    if (!(await repo.riderExists(riderId))) return null
+    const row = await repo.setSingleAssignment(riderId, shopId, active)
+    logAdminActivity(
+      actorId,
+      active ? 'ASSIGN_RIDER_TO_SHOP' : 'UNASSIGN_RIDER_FROM_SHOP',
+      'rider',
+      riderId,
+      null,
+      { shopId, active },
+      ip
+    )
+    if (active) {
+      // A newly-eligible rider for this shop may unblock orders that were
+      // sitting unassigned for lack of a store-scoped candidate.
+      await this._queueBacklogAssignScan('RIDER_SHOP_ASSIGNED')
+    }
+    return row
   }
 
   async _queueBacklogAssignScan(source) {

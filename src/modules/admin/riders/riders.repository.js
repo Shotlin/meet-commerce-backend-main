@@ -3,11 +3,26 @@ import { redis } from '../../../config/redis.js'
 import { OPEN_ASSIGNMENT_STATUSES, sqlInList } from '../../../constants/delivery-statuses.js'
 
 export class AdminRidersRepository {
-  async findAll({ offset, limit, search, status, sortBy = 'created_at', sortOrder = 'DESC' }) {
+  /**
+   * @param {string|null} shopId - when given (a shop-staff caller, or HQ
+   * with X-Shop-Id set), the roster is filtered to riders holding an
+   * ACTIVE `rider_store_assignments` row for this shop — a shop manager
+   * only ever sees their own store's riders, never the global fleet.
+   * `null` (HQ with no shop selected) keeps the original unscoped
+   * behaviour exactly as before this filter existed.
+   */
+  async findAll({ offset, limit, search, status, sortBy = 'created_at', sortOrder = 'DESC', shopId = null }) {
     const params = []
     const clauses = ["u.role = 'RIDER'"]
     let idx = 1
 
+    if (shopId) {
+      clauses.push(
+        `EXISTS (SELECT 1 FROM rider_store_assignments rsa WHERE rsa.rider_id = u.id AND rsa.shop_id = $${idx} AND rsa.is_active = true)`
+      )
+      params.push(shopId)
+      idx++
+    }
     if (search) {
       clauses.push(`(u.name ILIKE $${idx} OR u.phone ILIKE $${idx})`)
       params.push(`%${search}%`)
@@ -263,6 +278,64 @@ export class AdminRidersRepository {
       [riderId]
     )
     return rows.length > 0
+  }
+
+  /**
+   * True iff [riderId] has an ACTIVE assignment to [shopId]. Backs the
+   * shop-scoped ownership guard: a shop-staff caller may only act on a
+   * rider once this is true — see riders.routes.js's `requireRiderOwnership`.
+   */
+  async hasActiveAssignment(riderId, shopId) {
+    const { rows } = await query(
+      `SELECT 1 FROM rider_store_assignments
+        WHERE rider_id = $1 AND shop_id = $2 AND is_active = true
+        LIMIT 1`,
+      [riderId, shopId]
+    )
+    return rows.length > 0
+  }
+
+  /**
+   * Finds a rider by phone for the shop-side "add a rider" search. The
+   * caller passes an already-normalised (digits-only, `91`-prefix
+   * stripped) number; matched against `users.phone` with the same
+   * digits-only normalisation on the stored value, checked against
+   * both the bare number and a `91`-prefixed variant, since this
+   * codebase does not enforce one single storage convention for phone
+   * numbers (§ CLAUDE.md). Never a wildcard/partial search — bounded to
+   * one exact number, so a shop-scoped caller cannot browse the roster.
+   */
+  async findByPhone(normalizedPhone) {
+    const { rows: [rider] } = await query(
+      `SELECT u.id, u.name, u.phone, u.avatar_url, u.is_active,
+              rp.vehicle_type, rp.vehicle_number, rp.is_approved, rp.is_online
+       FROM users u
+       LEFT JOIN rider_profiles rp ON rp.user_id = u.id
+       WHERE u.role = 'RIDER'
+         AND regexp_replace(u.phone, '\\D', '', 'g') IN ($1, '91' || $1::text)
+       LIMIT 1`,
+      [normalizedPhone]
+    )
+    return rider || null
+  }
+
+  /**
+   * Inserts or reactivates/deactivates exactly ONE (rider, shop) row —
+   * never touches any other shop's assignment for this rider. This is
+   * the endpoint a shop-scoped caller uses (see `PUT /:id/my-shop-
+   * assignment`); the HQ-only `replaceStoreAssignments` below is the
+   * only place a caller can ever affect a shop it doesn't own.
+   */
+  async setSingleAssignment(riderId, shopId, active) {
+    const { rows: [row] } = await query(
+      `INSERT INTO rider_store_assignments (rider_id, shop_id, is_active)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (rider_id, shop_id)
+       DO UPDATE SET is_active = $3, updated_at = NOW()
+       RETURNING id, rider_id, shop_id, is_active, created_at, updated_at`,
+      [riderId, shopId, active]
+    )
+    return row
   }
 
   async getStoreAssignments(riderId) {

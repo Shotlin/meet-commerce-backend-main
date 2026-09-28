@@ -141,6 +141,32 @@ export const replaceStoreAssignmentsSchema = {
   },
 }
 
+export const setMyShopAssignmentSchema = {
+  params: {
+    type: 'object',
+    required: ['id'],
+    properties: { id: { type: 'string', pattern: uuidPattern } },
+  },
+  body: {
+    type: 'object',
+    required: ['active'],
+    properties: { active: { type: 'boolean' } },
+  },
+}
+
+export const searchByPhoneSchema = {
+  querystring: {
+    type: 'object',
+    required: ['phone'],
+    properties: {
+      // Loose on purpose — the service normalises (strips non-digits and
+      // a leading 91) before matching, so this only guards against an
+      // empty/absurdly long value.
+      phone: { type: 'string', minLength: 6, maxLength: 20 },
+    },
+  },
+}
+
 export const riderCollectionsSchema = {
   params: {
     type: 'object',
