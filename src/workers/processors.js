@@ -21,6 +21,10 @@ import {
 } from '../constants/delivery-statuses.js'
 
 const DEFAULT_RIDER_EARNING = 25
+// Notification channel the rider app creates (notification_service.dart) —
+// a push naming a channel the device doesn't have falls back to Android's
+// low-priority default, so rider pushes must name this one.
+const RIDER_PUSH_CHANNEL_ID = 'meetcommerce_rider_high'
 // Auto-assign fans out to every online rider sorted by distance with no
 // cutoff — without this, a rider hundreds/thousands of km from the
 // pickup store (anywhere with no other online riders nearby) gets
@@ -408,6 +412,7 @@ async function handleDeliveryReminder({ orderId, riderId }) {
       title: 'Delivery Reminder ⏰',
       body: 'You have a pending delivery. Please pick up the order.',
       data: { orderId, type: 'delivery_reminder' },
+      channelId: RIDER_PUSH_CHANNEL_ID,
     })
   }
 }
@@ -1048,6 +1053,7 @@ async function sendAssignedOrderPush({ riderId, payload }) {
         title: 'New delivery offer',
         body,
         data: pushData,
+        channelId: RIDER_PUSH_CHANNEL_ID,
       })
     )
   )
