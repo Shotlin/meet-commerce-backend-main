@@ -228,8 +228,26 @@ async function main() {
     )
     const winner = acceptA.status === 200 ? { rider: riderA, res: acceptA, pos: RIDER_A_POS } : { rider: riderB, res: acceptB, pos: RIDER_B_POS }
     const loser = acceptA.status === 200 ? { rider: riderB, label: 'B' } : { rider: riderA, label: 'A' }
-    const deliveryOtp = winner.res.json?.data?.deliveryOtp
-    record('Winning accept returned the delivery OTP', !!deliveryOtp)
+    // The delivery OTP belongs to the CUSTOMER: the rider's accept response
+    // and order list must never carry it. The E2E reads it from the DB the
+    // way the customer's own app receives it.
+    record(
+      'Accept response does NOT leak the delivery OTP to the rider',
+      !JSON.stringify(winner.res.json ?? {}).match(/deliveryOtp|delivery_otp/),
+    )
+    const otpRow = await db.query(
+      `SELECT delivery_otp FROM delivery_assignments
+        WHERE order_id = $1 AND status = 'ACCEPTED' LIMIT 1`,
+      [orderId],
+    )
+    const deliveryOtp = otpRow.rows[0]?.delivery_otp
+    record('Delivery OTP stored server-side for the customer', !!deliveryOtp)
+    const riderList = await api('GET', '/delivery/orders', { token: winner.rider.token })
+    record(
+      'Rider order list does NOT leak the delivery OTP',
+      !JSON.stringify(riderList.json ?? {}).includes(`"${deliveryOtp}"`) &&
+        !JSON.stringify(riderList.json ?? {}).match(/deliveryOtp|delivery_otp/),
+    )
 
     // ── 5. No second offer for the busy rider (§10) ────────────────
     // (Winner now holds an IN-progress assignment; create a second order
@@ -264,7 +282,41 @@ async function main() {
     )
     record('Available rider received the second offer', loserGotSecond)
 
-    // ── 6. Pickup ──────────────────────────────────────────────────
+    // ── 6. Store pickup scan (FreshCuts invoice QR) ────────────────
+    const numRow = await db.query(`SELECT order_number FROM orders WHERE id = $1`, [orderId])
+    const orderNumber = numRow.rows[0]?.order_number
+    const qr = `FRESHCUTS-ORDER|${orderNumber}|${orderId}`
+    const badQr = await api('POST', '/delivery/pickup-tokens/verify', {
+      body: { qr: `FRESHCUTS-ORDER|${orderNumber}|00000000-0000-4000-8000-000000000000` },
+      token: winner.rider.token,
+    })
+    record('Scan of an unknown order rejected', badQr.status === 404 || badQr.status === 403, `status=${badQr.status}`)
+    const otherRiderScan = await api('POST', '/delivery/pickup-tokens/verify', {
+      body: { qr },
+      token: loser.rider.token,
+    })
+    record(
+      "Another rider cannot verify this order's code (WRONG_RIDER)",
+      otherRiderScan.status === 403 && otherRiderScan.json?.code === 'WRONG_RIDER',
+      `status=${otherRiderScan.status}`,
+    )
+    const scan = await api('POST', '/delivery/pickup-tokens/verify', {
+      body: { qr },
+      token: winner.rider.token,
+    })
+    record(
+      'Pickup QR verified → price-free checklist',
+      scan.status === 200 &&
+        Array.isArray(scan.json?.data?.items) &&
+        !JSON.stringify(scan.json?.data ?? {}).match(/"(price|total|subtotal)"/),
+      `items=${scan.json?.data?.items?.length}`,
+    )
+    const pending = await api('GET', `/delivery/orders/${orderId}/pending-checklist`, {
+      token: winner.rider.token,
+    })
+    record('Pending checklist recoverable after scan', pending.status === 200)
+
+    // ── 6b. Pickup ─────────────────────────────────────────────────
     const pickup = await api('PATCH', `/delivery/orders/${orderId}/pickup`, {
       token: winner.rider.token,
     })

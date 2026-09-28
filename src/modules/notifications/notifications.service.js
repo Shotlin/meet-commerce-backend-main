@@ -63,8 +63,8 @@ export class NotificationsService {
     return await this.repository.updatePreferences(userId, preferences)
   }
 
-  async registerToken(userId, token, platform) {
-    return await this.repository.registerToken(userId, token, platform)
+  async registerToken(userId, token, platform, app = 'customer') {
+    return await this.repository.registerToken(userId, token, platform, app)
   }
 
   /**
@@ -77,7 +77,10 @@ export class NotificationsService {
   // backward-compatible for every notification type except the ones that
   // deliberately opt into a louder, distinct alert (currently only
   // ProcurementNotifier.requestPublished — see its own comment).
-  async sendNotification(userId, { title, body, type = 'general', data = {}, channelId, sound }) {
+  // `app` picks which FreshCuts app's device(s) get the PUSH: 'customer'
+  // (default — every existing caller is customer-facing), 'vendor' for the
+  // vendor app. The in-app row and Socket.IO emit are per-user and unchanged.
+  async sendNotification(userId, { title, body, type = 'general', data = {}, channelId, sound, app = 'customer' }) {
     // Order-lifecycle events (customer-order-event.helper.js's output,
     // type:'ORDER_STATUS' + data.timelineType) go through the admin-
     // configurable settings (migration 144) before anything else happens:
@@ -132,7 +135,7 @@ export class NotificationsService {
 
     // 3. Send push notification via FCM
     try {
-      const tokens = await this.repository.getFcmTokens(userId)
+      const tokens = await this.repository.getFcmTokens(userId, app)
       if (tokens.length > 0) {
         const tokenStrings = tokens.map(t => t.token)
         const pushOptions = { title, body, data: { ...data, notificationId: notification.id } }

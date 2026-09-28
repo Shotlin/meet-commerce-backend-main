@@ -111,7 +111,11 @@ export class AdminNotificationsService {
     // repository doc comment). Best-effort: a failure here must not skip
     // the push attempt below.
     const allTargetUserIds = await repo.getTargetUserIds(segment, segmentValue)
-    if (allTargetUserIds.length > 0) {
+    // Vendor campaigns are push-only: the vendor app has no notification
+    // inbox, and a vendor who is also a customer (same phone) must not see
+    // a vendor announcement in their customer Notification tab.
+    const isVendorSegment = segment === 'all_vendors' || segment === 'specific_vendor'
+    if (allTargetUserIds.length > 0 && !isVendorSegment) {
       try {
         await repo.createBulkNotifications(allTargetUserIds, {
           title, body, type: type || 'general', data: notificationData, campaignId,
@@ -127,7 +131,11 @@ export class AdminNotificationsService {
         sentCount: 0,
         failedCount: 0,
         failureSummary: allTargetUserIds.length > 0
-          ? { reason: `Delivered in-app to ${allTargetUserIds.length} user(s) — none had an active push token, so no push notification was sent.` }
+          ? {
+              reason: isVendorSegment
+                ? `${allTargetUserIds.length} vendor user(s) matched, but none has the vendor app signed in with push enabled — nothing was sent.`
+                : `Delivered in-app to ${allTargetUserIds.length} user(s) — none had an active push token, so no push notification was sent.`,
+            }
           : undefined,
       })
       return

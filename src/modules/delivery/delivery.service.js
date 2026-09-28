@@ -7,6 +7,21 @@ import { buildCustomerOrderEventNotification } from '../notifications/customer-o
 import { UploadsService } from '../uploads/uploads.service.js'
 import { CashbackService } from '../cashback/cashback.service.js'
 import { emit as emitAudit } from '../../utils/audit-log.js'
+import { parseOrderQr } from './pickup-qr.js'
+
+// Wrong customer-OTP guesses allowed per order before the rider must resend or use a proof photo.
+const MAX_OTP_ATTEMPTS = 5
+
+// Document types the rider_documents CHECK constraint accepts (migration 058).
+const RIDER_DOCUMENT_TYPES = [
+  'aadhaar',
+  'aadhaar_back',
+  'license',
+  'vehicle_rc',
+  'pan',
+  'photo',
+  'bank_proof',
+]
 
 const INLINE_AUTO_ASSIGN_IN_NON_PROD =
   process.env.AUTO_ASSIGN_INLINE === 'true' ||
@@ -32,6 +47,56 @@ export class DeliveryService {
     const profile = await this.repository.getRiderProfile(riderId)
     if (!profile) throw new Error('Rider profile not found')
     return profile
+  }
+
+  /**
+   * Rider self-service profile edit (name, vehicle, bank details). Text is
+   * trimmed; an empty string is rejected for name/vehicle fields rather than
+   * silently blanking a KYC record.
+   */
+  async updateRiderProfile(riderId, input = {}) {
+    const profile = await this.repository.getRiderProfile(riderId)
+    if (!profile) {
+      throw {
+        statusCode: 404,
+        message: 'Rider profile not found',
+        code: 'RIDER_NOT_FOUND',
+      }
+    }
+
+    const fields = {}
+    for (const key of ['name', 'vehicleType', 'vehicleNumber', 'bankAccountNumber', 'bankIfsc', 'bankName']) {
+      if (input[key] === undefined || input[key] === null) continue
+      const value = `${input[key]}`.trim()
+      if (!value) {
+        throw {
+          statusCode: 400,
+          message: `${key} cannot be empty`,
+          code: 'VALIDATION_ERROR',
+        }
+      }
+      fields[key] = value
+    }
+    if (fields.bankIfsc) fields.bankIfsc = fields.bankIfsc.toUpperCase()
+    if (fields.vehicleNumber) fields.vehicleNumber = fields.vehicleNumber.toUpperCase()
+    if (fields.bankIfsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(fields.bankIfsc)) {
+      throw {
+        statusCode: 400,
+        message: 'IFSC code looks invalid',
+        code: 'VALIDATION_ERROR',
+      }
+    }
+    if (fields.bankAccountNumber && !/^[0-9]{6,20}$/.test(fields.bankAccountNumber)) {
+      throw {
+        statusCode: 400,
+        message: 'Bank account number must be 6 to 20 digits',
+        code: 'VALIDATION_ERROR',
+      }
+    }
+    if (Object.keys(fields).length === 0) {
+      return profile
+    }
+    return this.repository.updateRiderProfile(riderId, fields)
   }
 
   async toggleOnline(riderId, isOnline) {
@@ -79,6 +144,13 @@ export class DeliveryService {
   }
 
   async uploadDocument({ riderId, fileStream, docType }) {
+    if (!RIDER_DOCUMENT_TYPES.includes(docType)) {
+      throw {
+        statusCode: 400,
+        message: `Unsupported document type. Use one of: ${RIDER_DOCUMENT_TYPES.join(', ')}`,
+        code: 'INVALID_DOCUMENT_TYPE',
+      }
+    }
     // 1. Upload to Cloudinary
     const result = await this.uploadsService.uploadImage(fileStream, {
       folder: `grocery-app/riders/${riderId}/documents`,
@@ -253,7 +325,11 @@ export class DeliveryService {
       })
     }
 
-    return { ...result.assignment, deliveryOtp: otp }
+    // The delivery OTP belongs to the CUSTOMER — it is what proves the
+    // parcel reached them. It is delivered to the customer (push + order
+    // screen) and never echoed back to the rider's app.
+    const { delivery_otp: _omitOtp, ...safeAssignment } = result.assignment || {}
+    return safeAssignment
   }
 
   async rejectOrder(riderId, orderId, reason) {
@@ -462,6 +538,13 @@ export class DeliveryService {
         code: 'ORDER_NOT_AVAILABLE',
       }
     }
+    // Stamp the store-scan consumed (best-effort bookkeeping — the pickup
+    // itself is already committed).
+    try {
+      await this.repository.consumePickupScan?.(orderId)
+    } catch (err) {
+      logger.warn({ err: err.message, orderId }, 'Could not consume pickup scan')
+    }
 
     this._emitOrderUpdate(orderId, {
       status: 'IN_TRANSIT',
@@ -506,6 +589,7 @@ export class DeliveryService {
 
     const otp = crypto.randomInt(1000, 9999).toString()
     await this.repository.storeDeliveryOtp(orderId, otp)
+    await this.repository.clearOtpFailures?.(orderId)
 
     this._logDeliveryAction('otp:resend', {
       orderId,
@@ -525,7 +609,8 @@ export class DeliveryService {
       })
     )
 
-    return { deliveryOtp: otp }
+    // The new OTP goes to the customer only — never back to the rider.
+    return { resent: true }
   }
 
   async markDelivered(riderId, orderId, otp, proofPhotoUrl, demoMode = false) {
@@ -588,7 +673,7 @@ export class DeliveryService {
     // client's old cash/upi fields were schema-dropped — this check is
     // the real gate.
     const isCod = `${assignment.payment_method || ''}`.toUpperCase() === 'COD'
-    if (isCod) {
+    if (isCod && this._amountDue(assignment) > 0) {
       const collection = await this.repository.getCollectionByOrderId(orderId)
       if (!collection) {
         throw {
@@ -615,8 +700,17 @@ export class DeliveryService {
     }
 
     if (cleanOtp) {
+      const failures = (await this.repository.getOtpFailures?.(orderId)) || 0
+      if (failures >= MAX_OTP_ATTEMPTS) {
+        throw {
+          statusCode: 429,
+          message: 'Too many wrong OTP attempts. Ask the customer for a new OTP or use a proof photo',
+          code: 'OTP_ATTEMPTS_EXCEEDED',
+        }
+      }
       const valid = await this.repository.verifyDeliveryOtp(orderId, cleanOtp)
       if (!valid) {
+        await this.repository.recordOtpFailure?.(orderId)
         throw {
           statusCode: 400,
           message: 'OTP did not match. Ask the customer to read it again',
@@ -732,7 +826,7 @@ export class DeliveryService {
   async getStoreInfo(shopId) {
     const shop = await this.repository.getShopInfo(shopId)
     return {
-      name: shop?.name || 'Bakaloo Store',
+      name: shop?.name || 'FreshCuts Store',
       address: shop?.address || '',
       phone: shop?.phone || '',
       lat: Number(shop?.pickup_lat) || 0,
@@ -786,7 +880,14 @@ export class DeliveryService {
       }
     }
 
-    const amountDue = Number(assignment.total_payable ?? 0)
+    const amountDue = this._amountDue(assignment)
+    if (amountDue <= 0) {
+      throw {
+        statusCode: 409,
+        message: 'Nothing to collect — this order is already paid',
+        code: 'COLLECTION_NOT_REQUIRED',
+      }
+    }
     const cash = Number(cashAmount ?? 0)
     const upi = Number(upiAmount ?? 0)
     if (!Number.isFinite(cash) || cash < 0 || !Number.isFinite(upi) || upi < 0) {
@@ -853,7 +954,142 @@ export class DeliveryService {
     return { collections, page, limit }
   }
 
+  // ─── STORE PICKUP VERIFICATION (order_pickup_scans, migration 146) ────
+
+  /**
+   * Verifies the invoice QR the rider scanned at the store. The QR is the
+   * FreshCuts order code (`FRESHCUTS-ORDER|<orderNumber>|<orderId>`); it is
+   * only accepted for an order this rider has accepted and not yet picked
+   * up. Returns the price-free packing checklist.
+   */
+  async verifyPickupScan(riderId, { qr } = {}) {
+    const parsed = parseOrderQr(qr)
+    if (!parsed) {
+      throw {
+        statusCode: 400,
+        message: 'This is not a FreshCuts order code. Scan the code on the invoice.',
+        code: 'INVALID_QR',
+      }
+    }
+
+    const assignment = await this.repository.getAssignmentByOrderAndRider(parsed.orderId, riderId)
+    if (!assignment) {
+      const snapshot = await this.repository.getOrderAssignmentSnapshot(parsed.orderId, riderId)
+      if (!snapshot) {
+        throw {
+          statusCode: 404,
+          message: 'Order not found',
+          code: 'ORDER_NOT_FOUND',
+        }
+      }
+      if (['IN_TRANSIT', 'DELIVERED'].includes(snapshot.assignment_status)) {
+        throw {
+          statusCode: 409,
+          message: 'This order has already been picked up',
+          code: 'ALREADY_PICKED_UP',
+        }
+      }
+      throw {
+        statusCode: 403,
+        message: 'This order is assigned to a different delivery partner',
+        code: 'WRONG_RIDER',
+      }
+    }
+
+    if (['IN_TRANSIT', 'PICKED_UP'].includes(assignment.status)) {
+      throw {
+        statusCode: 409,
+        message: 'This order has already been picked up',
+        code: 'ALREADY_PICKED_UP',
+      }
+    }
+    if (assignment.status !== 'ACCEPTED') {
+      throw {
+        statusCode: 409,
+        message: 'Accept the order before scanning its pickup code',
+        code: 'ORDER_NOT_ACCEPTED',
+      }
+    }
+
+    const order = await this.repository.getOrderForPickupChecklist(parsed.orderId)
+    if (!order || `${order.order_number}` !== parsed.orderNumber) {
+      // Order number and id must agree — a tampered/mismatched code is not
+      // accepted even if the id alone would resolve.
+      throw {
+        statusCode: 400,
+        message: 'This order code does not match the order. Ask the store for the right invoice.',
+        code: 'INVALID_QR',
+      }
+    }
+
+    await this.repository.recordPickupScan(parsed.orderId, riderId)
+    return this._buildPickupChecklist(order)
+  }
+
+  /**
+   * Re-fetches the checklist for an order this rider already scanned but has
+   * not confirmed picked up (app restart / closed sheet recovery).
+   */
+  async getPendingChecklist(riderId, orderId) {
+    const assignment = await this.repository.getAssignmentByOrderAndRider(orderId, riderId)
+    const scan = assignment?.status === 'ACCEPTED'
+      ? await this.repository.getPendingPickupScan(orderId, riderId)
+      : null
+    if (!scan) {
+      throw {
+        statusCode: 404,
+        message: 'No pickup checklist is pending for this order',
+        code: 'NO_PENDING_CHECKLIST',
+      }
+    }
+    const order = await this.repository.getOrderForPickupChecklist(orderId)
+    if (!order) {
+      throw {
+        statusCode: 404,
+        message: 'Order not found',
+        code: 'ORDER_NOT_FOUND',
+      }
+    }
+    return this._buildPickupChecklist(order)
+  }
+
+  /** Checklist shape the rider app's `PickupVerification` parses — no prices. */
+  _buildPickupChecklist(order) {
+    const address = this._parseAddress(order.delivery_address)
+    return {
+      orderId: order.id,
+      orderNumber: order.order_number,
+      customerName: order.customer_name || 'Customer',
+      customerPhone: order.customer_phone || '',
+      deliveryAddress: address,
+      lat: this._toNullableNumber(address.lat ?? address.latitude),
+      lng: this._toNullableNumber(address.lng ?? address.longitude),
+      deliveryNotes: order.delivery_notes || null,
+      deliveryInstructions: order.delivery_instructions || null,
+      items: this._parseItems(order.items).map((item) => ({
+        name: this._firstNonEmpty(item?.name, item?.product_name) || 'Item',
+        quantity: this._toNumber(item?.quantity, 1),
+        unit: this._firstNonEmpty(item?.unit) || '',
+        image: this._firstNonEmpty(item?.thumbnailUrl, item?.image, item?.imageUrl) || null,
+        variant: this._firstNonEmpty(item?.variant) || null,
+      })),
+    }
+  }
+
   // ─── INTERNAL HELPERS ───────────────────────────────
+
+  /**
+   * What the rider must actually collect at the door: the order total less
+   * any wallet slice already debited, and nothing at all once the order is
+   * PAID (online payment / wallet fully covered it).
+   */
+  _amountDue(assignment) {
+    if (`${assignment?.payment_status || ''}`.toUpperCase() === 'PAID') return 0
+    const total = Number(assignment?.total_payable ?? 0)
+    const wallet = Number(assignment?.wallet_amount ?? 0)
+    const due = total - (Number.isFinite(wallet) ? wallet : 0)
+    return Number.isFinite(due) ? Math.max(0, Number(due.toFixed(2))) : 0
+  }
 
   _emitOrderUpdate(orderId, data, userIds = []) {
     try {
@@ -1006,6 +1242,9 @@ export class DeliveryService {
 
   _normalizeAssignedOrder(row, store) {
     const order = { ...row }
+    // Never hand the customer's delivery OTP to the rider's app.
+    delete order.delivery_otp
+    delete order.deliveryOtp
     const customerAddressRaw = this._parseAddress(order.delivery_address)
     const customerLat = this._toNullableNumber(
       customerAddressRaw.lat ?? customerAddressRaw.latitude
@@ -1037,6 +1276,8 @@ export class DeliveryService {
       orderNumber: order.order_number,
       orderStatus: order.order_status,
       totalAmount: this._toNumber(order.total_payable, 0),
+      walletAmount: this._toNumber(order.wallet_amount, 0),
+      amountDue: this._amountDue(order),
       paymentMethod: order.payment_method,
       riderEarning: this._toNumber(order.earnings, 0),
       baseEarning: this._toNumber(order.base_earning, this._toNumber(order.earnings, 0)),
@@ -1061,7 +1302,7 @@ export class DeliveryService {
         lng: customerLng,
       },
       storeAddress: {
-        name: store?.name || 'Bakaloo Store',
+        name: store?.name || 'FreshCuts Store',
         address: store?.address || 'Assigned pickup hub',
         landmark: '',
         phone: store?.phone || '',

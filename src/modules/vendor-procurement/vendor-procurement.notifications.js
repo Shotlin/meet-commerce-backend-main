@@ -44,13 +44,13 @@ export class ProcurementNotifier {
    * Sends to user ids after the triggering transaction has committed.
    * Never throws — errors are logged (fire-and-forget contract).
    */
-  async dispatch(userIds, { title, body, type = 'procurement', data = {}, channelId, sound }) {
+  async dispatch(userIds, { title, body, type = 'procurement', data = {}, channelId, sound, app }) {
     if (!userIds || userIds.length === 0) return
     try {
       await Promise.allSettled(
         userIds.map((userId) =>
           this.notifications
-            ? this.notifications.sendNotification(userId, { title, body, type, data, channelId, sound })
+            ? this.notifications.sendNotification(userId, { title, body, type, data, channelId, sound, app })
             : Promise.resolve()
         )
       )
@@ -69,7 +69,9 @@ export class ProcurementNotifier {
   async notifyVendorUsers(vendorIds, payload) {
     try {
       const userIds = await this.resolveVendorUserIds(vendorIds)
-      this.notifyUsers(userIds, payload)
+      // Vendor-facing: push goes to the vendor app only, never the same
+      // person's customer app.
+      this.notifyUsers(userIds, { ...payload, app: 'vendor' })
     } catch (err) {
       logger.error({ err, vendorIds }, 'Resolving vendor users for notification failed')
     }

@@ -248,12 +248,17 @@ export class AdminNotificationsRepository {
     return rows.map((r) => r.user_id)
   }
 
+  // Only the tokens of the app this segment is for — a customer segment
+  // never pushes to the vendor app (even when the same person is signed
+  // into both), and a vendor segment never pushes to the customer app.
   async getTargetUsersWithTokens(segment, segmentValue) {
     const { where, params } = buildSegmentWhere(segment, segmentValue)
+    params.push(appForSegment(segment))
     const { rows } = await query(
       `SELECT DISTINCT ON (u.id) u.id AS user_id, ft.token AS fcm_token
        FROM users u
        INNER JOIN fcm_tokens ft ON ft.user_id = u.id AND ft.is_active = true
+         AND ft.app = $${params.length}
        WHERE ${where}
        ORDER BY u.id`,
       params
@@ -288,11 +293,41 @@ export class AdminNotificationsRepository {
   }
 }
 
+export const VENDOR_SEGMENTS = ['all_vendors', 'specific_vendor']
+
+/** Which app's push tokens a segment is delivered to. */
+export function appForSegment(segment) {
+  return VENDOR_SEGMENTS.includes(segment) ? 'vendor' : 'customer'
+}
+
 function buildSegmentWhere(segment, segmentValue) {
   const customerBaseWhere = "u.role = 'CUSTOMER' AND u.is_active = true"
+  const vendorBaseWhere = `u.is_active = true AND u.id IN (
+    SELECT vu.user_id FROM vendor_users vu
+    JOIN vendors v ON v.id = vu.vendor_id
+    WHERE vu.is_active = true AND vu.deleted_at IS NULL
+      AND v.is_active = true AND v.deleted_at IS NULL
+  )`
   const params = []
 
   switch (segment) {
+    case 'all_vendors':
+      return { where: vendorBaseWhere, params }
+
+    case 'specific_vendor': {
+      // segmentValue = a vendor id, or the phone number of one of that
+      // vendor's users. No value → matches nobody (never "every vendor").
+      if (!segmentValue) return { where: 'FALSE', params }
+      params.push(segmentValue)
+      return {
+        where: `${vendorBaseWhere} AND (
+          u.id IN (SELECT vu.user_id FROM vendor_users vu WHERE vu.vendor_id::text = $${params.length})
+          OR u.phone = $${params.length}
+        )`,
+        params,
+      }
+    }
+
     case 'all_customers':
     case 'all':
       return { where: customerBaseWhere, params }

@@ -77,8 +77,8 @@ export class NotificationsController {
    * POST /tokens — Register FCM/device token
    */
   async registerToken(request, reply) {
-    const { token, platform } = request.body
-    await this.service.registerToken(request.user.id, token, platform)
+    const { token, platform, app } = request.body
+    await this.service.registerToken(request.user.id, token, platform, app || 'customer')
     return reply.code(200).send(success(null, 'Token registered successfully'))
   }
 }

@@ -97,33 +97,37 @@ export class NotificationsRepository {
     return rows[0].notification_preferences
   }
 
-  async registerToken(userId, token, platform) {
+  async registerToken(userId, token, platform, app = 'customer') {
     // Upsert: if token exists, re-activate and update owner.
     // Also mark all OTHER tokens for this user as inactive — a user should
     // only have ONE active token at a time (the most recently registered one).
     // This prevents sending to 10+ stale tokens accumulated over reinstalls.
     await query(
-      `INSERT INTO fcm_tokens (user_id, token, platform, is_active, updated_at)
-       VALUES ($1, $2, $3, true, NOW())
+      `INSERT INTO fcm_tokens (user_id, token, platform, app, is_active, updated_at)
+       VALUES ($1, $2, $3, $4, true, NOW())
        ON CONFLICT (token) DO UPDATE
          SET user_id = EXCLUDED.user_id,
              platform = EXCLUDED.platform,
+             app = EXCLUDED.app,
              is_active = true,
              updated_at = NOW()`,
-      [userId, token, platform]
+      [userId, token, platform, app]
     )
-    // Deactivate all other tokens for this user (keep only the new one active)
+    // Deactivate this user's OTHER tokens — but only within the same app.
+    // One phone number can be signed into the customer app and the vendor
+    // app at once; each app keeps its own single active token instead of
+    // the last one to register silencing the other.
     await query(
       `UPDATE fcm_tokens SET is_active = false
-       WHERE user_id = $1 AND token != $2 AND is_active = true`,
-      [userId, token]
+       WHERE user_id = $1 AND app = $3 AND token != $2 AND is_active = true`,
+      [userId, token, app]
     )
   }
 
-  async getFcmTokens(userId) {
+  async getFcmTokens(userId, app = 'customer') {
     const { rows } = await query(
-      'SELECT token, platform FROM fcm_tokens WHERE user_id = $1 AND is_active = true',
-      [userId]
+      'SELECT token, platform FROM fcm_tokens WHERE user_id = $1 AND app = $2 AND is_active = true',
+      [userId, app]
     )
     return rows
   }

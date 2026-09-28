@@ -137,6 +137,7 @@ export class DeliveryRepository {
     const { rows } = await query(
       `SELECT da.id as assignment_id, da.*, o.order_number, o.customer_id as customer_id, o.status as order_status,
               o.shop_id, o.total_payable, o.payment_method,
+              o.wallet_amount, o.payment_status,
               ru.name as rider_name, ru.phone as rider_phone,
               rp.current_lat as rider_lat, rp.current_lng as rider_lng
        FROM delivery_assignments da
@@ -169,6 +170,112 @@ export class DeliveryRepository {
       [orderId, riderId]
     )
     return rows[0] || null
+  }
+
+  // ─── PICKUP SCAN (store QR verification, migration 146) ────────────
+
+  /** Price-free order data behind the pickup checklist. */
+  async getOrderForPickupChecklist(orderId) {
+    const { rows } = await query(
+      `SELECT o.id, o.order_number, o.delivery_address, o.delivery_notes,
+              o.delivery_instructions, o.items,
+              u.name AS customer_name, u.phone AS customer_phone
+       FROM orders o
+       LEFT JOIN users u ON u.id = o.customer_id
+       WHERE o.id = $1
+       LIMIT 1`,
+      [orderId]
+    )
+    return rows[0] || null
+  }
+
+  /**
+   * Records (or refreshes) the verified scan for an order. Idempotent for
+   * the same rider; a scan already consumed by a confirmed pickup is left
+   * untouched.
+   */
+  async recordPickupScan(orderId, riderId) {
+    const { rows } = await query(
+      `INSERT INTO order_pickup_scans (order_id, rider_id)
+       VALUES ($1, $2)
+       ON CONFLICT (order_id) DO UPDATE
+         SET rider_id = EXCLUDED.rider_id, verified_at = NOW()
+         WHERE order_pickup_scans.consumed_at IS NULL
+       RETURNING *`,
+      [orderId, riderId]
+    )
+    return rows[0] || null
+  }
+
+  /** A verified-but-not-yet-consumed scan by this rider, if any. */
+  async getPendingPickupScan(orderId, riderId) {
+    const { rows } = await query(
+      `SELECT * FROM order_pickup_scans
+       WHERE order_id = $1 AND rider_id = $2 AND consumed_at IS NULL
+       LIMIT 1`,
+      [orderId, riderId]
+    )
+    return rows[0] || null
+  }
+
+  async consumePickupScan(orderId) {
+    await query(
+      `UPDATE order_pickup_scans SET consumed_at = NOW()
+       WHERE order_id = $1 AND consumed_at IS NULL`,
+      [orderId]
+    )
+  }
+
+  // ─── RIDER SELF-SERVICE PROFILE ───────────────────────────────────
+
+  /**
+   * Updates the rider's own editable profile fields. `name` lives on
+   * `users`; vehicle/bank details live on `rider_profiles`. Only keys
+   * present in `fields` are written.
+   */
+  async updateRiderProfile(userId, fields) {
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+
+      if (fields.name !== undefined) {
+        await client.query(
+          `UPDATE users SET name = $2, updated_at = NOW() WHERE id = $1`,
+          [userId, fields.name]
+        )
+      }
+
+      const columnMap = {
+        vehicleType: 'vehicle_type',
+        vehicleNumber: 'vehicle_number',
+        bankAccountNumber: 'bank_account_number',
+        bankIfsc: 'bank_ifsc',
+        bankName: 'bank_name',
+      }
+      const sets = []
+      const params = [userId]
+      for (const [key, column] of Object.entries(columnMap)) {
+        if (fields[key] !== undefined) {
+          params.push(fields[key])
+          sets.push(`${column} = $${params.length}`)
+        }
+      }
+      if (sets.length > 0) {
+        await client.query(
+          `UPDATE rider_profiles SET ${sets.join(', ')}, updated_at = NOW()
+           WHERE user_id = $1`,
+          params
+        )
+      }
+
+      await client.query('COMMIT')
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
+    return this.getRiderProfile(userId)
   }
 
   // ─── ORDER ACTIONS ──────────────────────────────────
@@ -669,6 +776,22 @@ export class DeliveryRepository {
     )
   }
 
+  // Wrong-OTP attempt counter (per order, 15-minute window).
+  async recordOtpFailure(orderId) {
+    const key = `delivery:otp-fail:${orderId}`
+    const count = await redis.incr(key)
+    if (count === 1) await redis.expire(key, 900)
+    return count
+  }
+
+  async getOtpFailures(orderId) {
+    return Number(await redis.get(`delivery:otp-fail:${orderId}`)) || 0
+  }
+
+  async clearOtpFailures(orderId) {
+    await redis.del(`delivery:otp-fail:${orderId}`)
+  }
+
   async verifyDeliveryOtp(orderId, otp) {
     const { rows } = await query(
       `SELECT delivery_otp FROM delivery_assignments
@@ -995,7 +1118,7 @@ export class DeliveryRepository {
     const settings = {
       lat: null,
       lng: null,
-      name: 'Bakaloo Store',
+      name: 'FreshCuts Store',
       address: 'Assigned pickup hub',
       phone: '',
     }

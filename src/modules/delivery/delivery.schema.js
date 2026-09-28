@@ -208,6 +208,46 @@ export const getProfileSchema = {
   summary: 'Get rider profile',
 }
 
+export const updateProfileSchema = {
+  tags: ['Delivery'],
+  summary: 'Update the rider profile (name, vehicle, bank details)',
+  body: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', minLength: 1, maxLength: 100 },
+      vehicleType: { type: 'string', minLength: 1, maxLength: 50 },
+      vehicleNumber: { type: 'string', minLength: 1, maxLength: 20 },
+      bankAccountNumber: { type: 'string', minLength: 1, maxLength: 20 },
+      bankIfsc: { type: 'string', minLength: 1, maxLength: 15 },
+      bankName: { type: 'string', minLength: 1, maxLength: 100 },
+    },
+  },
+}
+
+export const verifyPickupScanSchema = {
+  tags: ['Delivery'],
+  summary: 'Verify the FreshCuts invoice QR scanned at the store',
+  body: {
+    type: 'object',
+    required: ['qr'],
+    properties: {
+      qr: { type: 'string', minLength: 1, maxLength: 200 },
+    },
+  },
+}
+
+export const pendingChecklistSchema = {
+  tags: ['Delivery'],
+  summary: 'Re-fetch a verified-but-unconfirmed pickup checklist',
+  params: {
+    type: 'object',
+    required: ['id'],
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+    },
+  },
+}
+
 export const getHistorySchema = {
   tags: ['Delivery'],
   summary: 'Get delivery history',

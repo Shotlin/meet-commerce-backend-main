@@ -19,6 +19,9 @@ import {
   getHistorySchema,
   getDocumentsSchema,
   uploadDocumentSchema,
+  updateProfileSchema,
+  verifyPickupScanSchema,
+  pendingChecklistSchema,
   postCollectionSchema,
   collectionsSummarySchema,
   collectionsListSchema,
@@ -34,13 +37,20 @@ export default async function deliveryRoutes(fastify) {
   const service = new DeliveryService(repository, fastify)
   const controller = new DeliveryController(service)
 
-  // All routes require authentication
+  // All routes require authentication AND the rider role — the delivery API
+  // is the rider app's surface; customers/vendors have no business here.
   fastify.addHook('preHandler', fastify.authenticate)
+  fastify.addHook('preHandler', fastify.authorize(['RIDER', 'DELIVERY']))
 
   // GET /profile — Rider profile
   fastify.get('/profile', {
     schema: getProfileSchema,
   }, controller.getProfile.bind(controller))
+
+  // PATCH /profile — Rider self-service edit (name, vehicle, bank details)
+  fastify.patch('/profile', {
+    schema: updateProfileSchema,
+  }, controller.updateProfile.bind(controller))
 
   // GET /documents — Get rider documents
   fastify.get('/documents', {
@@ -87,12 +97,24 @@ export default async function deliveryRoutes(fastify) {
     schema: cancelDeliverySchema,
   }, controller.cancelDelivery.bind(controller))
 
+  // POST /pickup-tokens/verify — verify the invoice QR scanned at the store
+  fastify.post('/pickup-tokens/verify', {
+    schema: verifyPickupScanSchema,
+  }, controller.verifyPickupScan.bind(controller))
+
+  // GET /orders/:id/pending-checklist — recover a verified-but-unconfirmed scan
+  fastify.get('/orders/:id/pending-checklist', {
+    schema: pendingChecklistSchema,
+  }, controller.getPendingChecklist.bind(controller))
+
   // PATCH /orders/:id/pickup — Mark picked up
   fastify.patch('/orders/:id/pickup', {
     schema: markPickedUpSchema,
   }, controller.markPickedUp.bind(controller))
 
-  // PATCH /orders/:id/deliver — Mark delivered
+  // PATCH /orders/:id/deliver — Mark delivered (wrong-OTP attempts are
+  // counted per order in the service — the 4-digit code must not be
+  // brute-forceable).
   fastify.patch('/orders/:id/deliver', {
     schema: markDeliveredSchema,
   }, controller.markDelivered.bind(controller))

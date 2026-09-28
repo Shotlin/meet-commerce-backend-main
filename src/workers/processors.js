@@ -98,7 +98,7 @@ export async function processThemeJob(job) {
 async function handlePushNotification({ userId, title, body, data }) {
   // Get user's FCM tokens
   const { rows: tokens } = await query(
-    'SELECT token FROM fcm_tokens WHERE user_id = $1',
+    "SELECT token FROM fcm_tokens WHERE user_id = $1 AND app = 'customer' AND is_active = true",
     [userId]
   )
 
@@ -142,7 +142,7 @@ async function handleOrderStatusNotification({ orderId, userId, status, orderNum
 
   // Send push notification
   const { rows: tokens } = await query(
-    'SELECT token FROM fcm_tokens WHERE user_id = $1',
+    "SELECT token FROM fcm_tokens WHERE user_id = $1 AND app = 'customer' AND is_active = true",
     [userId]
   )
 
@@ -399,7 +399,7 @@ export async function clearLegacyAssignmentTimeoutJobs() {
 
 async function handleDeliveryReminder({ orderId, riderId }) {
   const { rows: tokens } = await query(
-    'SELECT token FROM fcm_tokens WHERE user_id = $1',
+    "SELECT token FROM fcm_tokens WHERE user_id = $1 AND app = 'rider' AND is_active = true",
     [riderId]
   )
 
@@ -469,6 +469,7 @@ async function handleAutoAssign({ orderId, source = 'SYSTEM' }) {
 
   const { rows: orderRows } = await query(
     `SELECT o.id, o.order_number, o.status, o.rider_id, o.total_payable, o.payment_method,
+            o.wallet_amount, o.payment_status,
             o.delivery_fee, o.shop_id,
             o.items, o.delivery_address, o.created_at,
             u.name AS customer_name, u.phone AS customer_phone
@@ -957,7 +958,7 @@ function normalizeSettingValue(value) {
   return ''
 }
 
-function buildAssignedPayload({
+export function buildAssignedPayload({
   order,
   assignment,
   store,
@@ -980,7 +981,16 @@ function buildAssignedPayload({
     assignmentId: assignment.id,
     orderNumber: order.order_number,
     status: 'ASSIGNED',
-    totalAmount: toNumber(order.total_amount, 0),
+    // `orders.total_amount` was renamed `total_payable` by migration 106 —
+    // reading the old name made every realtime offer/push carry ₹0.
+    totalAmount: toNumber(order.total_payable, 0),
+    walletAmount: toNumber(order.wallet_amount, 0),
+    // What the rider must collect at the door: total less the wallet slice
+    // already paid, nothing once the order is PAID (same rule as
+    // DeliveryService#_amountDue).
+    amountDue: `${order.payment_status || ''}`.toUpperCase() === 'PAID'
+      ? 0
+      : Math.max(0, Number((toNumber(order.total_payable, 0) - toNumber(order.wallet_amount, 0)).toFixed(2))),
     paymentMethod: order.payment_method || 'ONLINE',
     estimatedDistance: safeDistanceKm == null
       ? null
@@ -1016,7 +1026,7 @@ async function sendAssignedOrderPush({ riderId, payload }) {
   }
 
   const { rows: tokens } = await query(
-    'SELECT token FROM fcm_tokens WHERE user_id = $1',
+    "SELECT token FROM fcm_tokens WHERE user_id = $1 AND app = 'rider' AND is_active = true",
     [riderId]
   )
 
@@ -1051,6 +1061,8 @@ function buildAssignedPushData(payload) {
     orderNumber: payload.orderNumber,
     status: payload.status,
     totalAmount: payload.totalAmount,
+    amountDue: payload.amountDue,
+    walletAmount: payload.walletAmount,
     paymentMethod: payload.paymentMethod,
     estimatedDistance: payload.estimatedDistance ?? '',
     estimatedDuration: payload.estimatedDuration ?? '',

@@ -81,6 +81,8 @@ export const registerTokenSchema = {
     properties: {
       token: { type: 'string' },
       platform: { type: 'string', enum: ['ios', 'android', 'web'] },
+      // Omitted by the customer app (defaults to 'customer').
+      app: { type: 'string', enum: ['customer', 'vendor', 'rider'] },
     },
   },
 }

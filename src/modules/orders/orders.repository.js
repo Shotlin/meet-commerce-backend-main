@@ -158,6 +158,24 @@ export class OrdersRepository {
     return rows[0] ? this._formatCheckoutOrder(rows[0]) : null
   }
 
+  /**
+   * The customer's proof-of-delivery OTP for an order whose rider is on the
+   * way (accepted / in transit). Only ever surfaced to the order's owner —
+   * see OrdersService#getOrderById. Null when no rider holds the order.
+   */
+  async getActiveDeliveryOtp(orderId) {
+    const { rows } = await query(
+      `SELECT delivery_otp FROM delivery_assignments
+       WHERE order_id = $1
+         AND status IN ('ACCEPTED', 'PICKED_UP', 'IN_TRANSIT')
+         AND delivery_otp IS NOT NULL
+       ORDER BY assigned_at DESC NULLS LAST
+       LIMIT 1`,
+      [orderId]
+    )
+    return rows[0]?.delivery_otp || null
+  }
+
   async getOrderItems(orderId) {
     const { rows } = await query(
       `SELECT * FROM order_items WHERE order_id = $1 ORDER BY created_at`,

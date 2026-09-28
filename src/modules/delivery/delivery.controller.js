@@ -17,6 +17,30 @@ export class DeliveryController {
   }
 
   /**
+   * PATCH /profile — Rider self-service profile edit
+   */
+  async updateProfile(request, reply) {
+    const profile = await this.service.updateRiderProfile(request.user.id, request.body || {})
+    return reply.code(200).send(success(profile, 'Rider profile updated'))
+  }
+
+  /**
+   * POST /pickup-tokens/verify — verify the invoice QR scanned at the store
+   */
+  async verifyPickupScan(request, reply) {
+    const checklist = await this.service.verifyPickupScan(request.user.id, request.body || {})
+    return reply.code(200).send(success(checklist, 'Pickup code verified'))
+  }
+
+  /**
+   * GET /orders/:id/pending-checklist — recover the checklist after a restart
+   */
+  async getPendingChecklist(request, reply) {
+    const checklist = await this.service.getPendingChecklist(request.user.id, request.params.id)
+    return reply.code(200).send(success(checklist, 'Pending checklist fetched'))
+  }
+
+  /**
    * GET /documents — Get uploaded documents
    */
   async getDocuments(request, reply) {

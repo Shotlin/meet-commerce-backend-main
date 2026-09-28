@@ -177,8 +177,10 @@ async function socketioPlugin(fastify) {
             })
           }
 
-          // Broadcast to admin
-          io.to('riders:online').emit('rider:location:bulk', {
+          // Broadcast to the admin dashboard ONLY. This used to target the
+          // `riders:online` room, which every rider socket joins — so each
+          // rider received every other rider's live coordinates.
+          io.to('admin:dashboard').emit('rider:location:bulk', {
             riderId: userId,
             latitude,
             longitude,

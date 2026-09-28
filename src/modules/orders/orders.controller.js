@@ -48,7 +48,17 @@ export class OrdersController {
 
   getOrderById = async (req, reply) => {
     const { orderId } = req.params
-    const order = await this.service.getOrderById(orderId)
+    // Scope the read: the owner, HQ/admin users (`platform_role` /
+    // ADMIN-family role), or staff of the order's own shop. Any other
+    // authenticated caller must not be able to read someone else's
+    // address, phone and items by guessing/knowing an order id.
+    const role = req.user?.platform_role || req.user?.role
+    const viewer = {
+      userId: req.userId || req.user?.id,
+      isPlatformStaff: Boolean(req.user?.platform_role) || role === 'ADMIN' || role === 'SUPER_ADMIN',
+      shopId: req.user?.shopId || null,
+    }
+    const order = await this.service.getOrderById(orderId, viewer)
     return reply.status(200).send({ success: true, data: order })
   }
 

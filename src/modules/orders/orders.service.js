@@ -374,7 +374,26 @@ export class OrdersService {
 
   /** Most recent order still in progress — powers the mobile "track your order" banner. */
   async getActiveOrder(customerId) {
-    return this.repository.getActiveOrder(customerId)
+    const order = await this.repository.getActiveOrder(customerId)
+    return this._withDeliveryOtp(order)
+  }
+
+  /**
+   * Attaches the proof-of-delivery OTP to an order object handed to its
+   * OWNER while the rider is on the way, so the customer app can show it
+   * (the rider's app never receives it). Best-effort: a lookup failure
+   * just means no OTP is shown, never a failed order fetch.
+   */
+  async _withDeliveryOtp(order) {
+    if (!order || !this.repository.getActiveDeliveryOtp) return order
+    const status = `${order.status || ''}`.toUpperCase()
+    if (!['OUT_FOR_DELIVERY', 'PICKED_UP', 'IN_TRANSIT'].includes(status)) return order
+    try {
+      const otp = await this.repository.getActiveDeliveryOtp(order.id)
+      return otp ? { ...order, deliveryOtp: otp } : order
+    } catch {
+      return order
+    }
   }
 
   /**
@@ -690,7 +709,13 @@ export class OrdersService {
     return task
   }
 
-  async getOrderById(orderId) {
+  /**
+   * `viewer` (`{ userId, roles, shopId, isStaff }`) scopes who may read the
+   * order: its owner, HQ/admin staff, or staff of the order's own shop.
+   * Anyone else gets a plain 404 (no existence leak). Internal callers that
+   * omit `viewer` are trusted and unscoped.
+   */
+  async getOrderById(orderId, viewer = null) {
     const order = await this.repository.findOrderById(orderId)
     if (!order) {
       const err = new Error('Order not found')
@@ -698,7 +723,18 @@ export class OrdersService {
       err.code = 'ORDER_NOT_FOUND'
       throw err
     }
-    return order
+    if (!viewer) return order
+
+    const isOwner = order.customer_id && order.customer_id === viewer.userId
+    const isPlatformStaff = Boolean(viewer.isPlatformStaff)
+    const isShopStaff = Boolean(viewer.shopId) && order.shop_id === viewer.shopId
+    if (!isOwner && !isPlatformStaff && !isShopStaff) {
+      const err = new Error('Order not found')
+      err.statusCode = 404
+      err.code = 'ORDER_NOT_FOUND'
+      throw err
+    }
+    return isOwner ? this._withDeliveryOtp(order) : order
   }
 
   async listOrders(params = {}) {
