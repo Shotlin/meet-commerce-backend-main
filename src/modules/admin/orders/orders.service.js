@@ -570,6 +570,7 @@ export class AdminOrdersService {
       orderId, riderId, orderNumber: order.order_number,
     })
 
+    this._notifyPreviousRider(order, order.rider_id, riderId)
     this._emitAssignedOrder(order, riderId)
 
     return { orderId, riderId }
@@ -589,6 +590,12 @@ export class AdminOrdersService {
       }
     }
 
+    const previousRiders = new Map()
+    for (const { orderId } of assignments) {
+      const prev = await this.repository.findById(orderId)
+      if (prev) previousRiders.set(orderId, prev)
+    }
+
     const results = await this.repository.bulkAssign(assignments)
     logAdminActivity(adminId, `Bulk assigned ${assignments.length} orders`, 'order', null, null,
       { count: assignments.length }, ip)
@@ -600,6 +607,8 @@ export class AdminOrdersService {
       })
 
       const order = await this.repository.findById(result.orderId)
+      const before = previousRiders.get(result.orderId)
+      if (before) this._notifyPreviousRider(before, before.rider_id, result.riderId)
       if (order) {
         this._emitAssignedOrder(order, result.riderId)
       }
@@ -994,6 +1003,22 @@ export class AdminOrdersService {
       }
     }
     return { updated: results.filter(r => r.success).length, results }
+  }
+
+  // A reassigned rider's app otherwise keeps the old ACCEPTED order (and its
+  // pickup-scan state) forever, since nothing tells it the assignment was cancelled.
+  _notifyPreviousRider(order, previousRiderId, newRiderId) {
+    try {
+      if (!previousRiderId || previousRiderId === newRiderId) return
+      this.fastify?.emitOrderUpdate?.(order.id, [previousRiderId], {
+        orderId: order.id,
+        orderNumber: order.order_number,
+        status: 'CANCELLED',
+        message: 'Order reassigned to another delivery partner',
+      })
+    } catch (_) {
+      // realtime is best-effort
+    }
   }
 
   async _emitAssignedOrder(order, riderId) {
