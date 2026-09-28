@@ -45,7 +45,10 @@ async function getFirebaseApp() {
  * Send push notification to a single device token.
  * Returns { success, messageId } or { success: false, reason, tokenInvalid }
  */
-export async function sendPush(fcmToken, { title, body, imageUrl, deepLink, data = {} }) {
+export async function sendPush(
+  fcmToken,
+  { title, body, imageUrl, deepLink, data = {}, channelId = 'bakaloo_notifications', sound = 'default' }
+) {
   const app = await getFirebaseApp()
   if (!app) {
     logger.debug({ title }, 'FCM not configured — skipping push notification')
@@ -75,14 +78,14 @@ export async function sendPush(fcmToken, { title, body, imageUrl, deepLink, data
       android: {
         priority: 'high',
         notification: {
-          sound: 'default',
-          channelId: 'bakaloo_notifications',
+          sound,
+          channelId,
           imageUrl: imageUrl && isValidHttpsUrl(imageUrl) ? imageUrl : undefined,
           clickAction: 'FLUTTER_NOTIFICATION_CLICK',
         },
       },
       apns: {
-        payload: { aps: { sound: 'default', badge: 1 } },
+        payload: { aps: { sound, badge: 1 } },
         fcmOptions: imageUrl && isValidHttpsUrl(imageUrl)
           ? { imageUrl }
           : undefined,

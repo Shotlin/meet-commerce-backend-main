@@ -44,13 +44,13 @@ export class ProcurementNotifier {
    * Sends to user ids after the triggering transaction has committed.
    * Never throws — errors are logged (fire-and-forget contract).
    */
-  async dispatch(userIds, { title, body, type = 'procurement', data = {} }) {
+  async dispatch(userIds, { title, body, type = 'procurement', data = {}, channelId, sound }) {
     if (!userIds || userIds.length === 0) return
     try {
       await Promise.allSettled(
         userIds.map((userId) =>
           this.notifications
-            ? this.notifications.sendNotification(userId, { title, body, type, data })
+            ? this.notifications.sendNotification(userId, { title, body, type, data, channelId, sound })
             : Promise.resolve()
         )
       )
@@ -84,6 +84,16 @@ export class ProcurementNotifier {
         title: 'New procurement requirement',
         body: `${shopName || 'A FreshCuts store'} published ${requestNumber} — respond before the deadline.`,
         data: { event: 'request_published', request_id: requestId, request_number: requestNumber, mode },
+        // A new requirement is the one event the vendor app rings a loud,
+        // looping in-app alert for while running (ProcurementAlertListener)
+        // — this makes the same event equally hard to miss via a real push
+        // when the app is fully closed, using the vendor app's own
+        // Android notification channel (created client-side, §the vendor
+        // app's PushNotificationService) instead of the shared generic
+        // 'bakaloo_notifications' channel every other notification type
+        // still uses by default.
+        channelId: 'procurement_alerts',
+        sound: 'new_requirement_alert',
       }
     )
   }

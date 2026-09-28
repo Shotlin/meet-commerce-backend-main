@@ -786,7 +786,7 @@ export class DeliveryService {
       }
     }
 
-    const amountDue = Number(assignment.total_amount ?? 0)
+    const amountDue = Number(assignment.total_payable ?? 0)
     const cash = Number(cashAmount ?? 0)
     const upi = Number(upiAmount ?? 0)
     if (!Number.isFinite(cash) || cash < 0 || !Number.isFinite(upi) || upi < 0) {
@@ -1036,7 +1036,7 @@ export class DeliveryService {
       assignmentStatus: order.assignment_status,
       orderNumber: order.order_number,
       orderStatus: order.order_status,
-      totalAmount: this._toNumber(order.total_amount, 0),
+      totalAmount: this._toNumber(order.total_payable, 0),
       paymentMethod: order.payment_method,
       riderEarning: this._toNumber(order.earnings, 0),
       baseEarning: this._toNumber(order.base_earning, this._toNumber(order.earnings, 0)),

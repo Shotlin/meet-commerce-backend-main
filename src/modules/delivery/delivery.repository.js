@@ -106,14 +106,14 @@ export class DeliveryRepository {
                ELSE true
              END as is_offer_active,
              o.id as order_id, o.order_number, o.status as order_status,
-             o.shop_id, o.total_amount, o.payment_method, o.delivery_fee,
+             o.shop_id, o.total_payable, o.payment_method, o.delivery_fee,
              o.delivery_address, o.delivery_notes,
              o.items, o.estimated_delivery, o.created_at,
-             o.user_id as customer_id,
+             o.customer_id as customer_id,
              u.name as customer_name, u.phone as customer_phone
       FROM delivery_assignments da
       JOIN orders o ON o.id = da.order_id
-      LEFT JOIN users u ON u.id = o.user_id
+      LEFT JOIN users u ON u.id = o.customer_id
       LEFT JOIN rider_earnings re ON re.order_id = da.order_id AND re.rider_id = da.rider_id
       WHERE da.rider_id = $1
     `
@@ -135,8 +135,8 @@ export class DeliveryRepository {
 
   async getAssignmentByOrderAndRider(orderId, riderId) {
     const { rows } = await query(
-      `SELECT da.id as assignment_id, da.*, o.order_number, o.user_id as customer_id, o.status as order_status,
-              o.shop_id, o.total_amount, o.payment_method,
+      `SELECT da.id as assignment_id, da.*, o.order_number, o.customer_id as customer_id, o.status as order_status,
+              o.shop_id, o.total_payable, o.payment_method,
               ru.name as rider_name, ru.phone as rider_phone,
               rp.current_lat as rider_lat, rp.current_lng as rider_lng
        FROM delivery_assignments da
@@ -514,7 +514,7 @@ export class DeliveryRepository {
       const { rows: [orderFeeRow] } = await client.query(
         `SELECT o.delivery_fee, o.order_number, COALESCE(u.name, 'Customer') AS customer_name
          FROM orders o
-         LEFT JOIN users u ON u.id = o.user_id
+         LEFT JOIN users u ON u.id = o.customer_id
          WHERE o.id = $1`,
         [orderId]
       )
@@ -907,7 +907,7 @@ export class DeliveryRepository {
             COALESCE(re.performance_bonus, 0) AS performance_bonus,
             COALESCE(re.tip_amount, 0) AS tip_amount
          FROM orders o
-         LEFT JOIN users u ON u.id = o.user_id
+         LEFT JOIN users u ON u.id = o.customer_id
          LEFT JOIN delivery_assignments da ON da.order_id = o.id AND da.rider_id = $2
          LEFT JOIN rider_earnings re ON re.order_id = o.id AND re.rider_id = $2
          WHERE o.id = $1
@@ -1108,7 +1108,7 @@ export class DeliveryRepository {
   /** Per-order collection records, newest first. */
   async getCollections(riderId, { limit, offset }) {
     const { rows } = await query(
-      `SELECT dc.*, o.order_number, o.total_amount
+      `SELECT dc.*, o.order_number, o.total_payable
        FROM delivery_collections dc
        JOIN orders o ON o.id = dc.order_id
        WHERE dc.rider_id = $1
@@ -1190,7 +1190,7 @@ export class DeliveryRepository {
       query(
         `SELECT da.id as assignment_id, da.status, da.delivered_at,
                 COALESCE(NULLIF(da.earnings, 0), NULLIF(o.delivery_fee, 0), 25) as earnings,
-                o.id as order_id, o.order_number, o.total_amount, o.delivery_address
+                o.id as order_id, o.order_number, o.total_payable, o.delivery_address
          FROM delivery_assignments da
          JOIN orders o ON o.id = da.order_id
          WHERE da.rider_id = $1 AND da.status IN ('DELIVERED', 'CANCELLED')

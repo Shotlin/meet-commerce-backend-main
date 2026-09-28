@@ -269,7 +269,8 @@ export class AdminRidersRepository {
     const { rows } = await query(
       `SELECT rsa.id, rsa.rider_id, rsa.shop_id, rsa.is_active,
               rsa.created_at, rsa.updated_at,
-              s.name AS shop_name, s.address AS shop_address
+              s.name AS shop_name,
+              CONCAT_WS(', ', s.address_line1, s.address_line2, s.city, s.state, s.pincode) AS shop_address
        FROM rider_store_assignments rsa
        JOIN shops s ON s.id = rsa.shop_id
        WHERE rsa.rider_id = $1
@@ -314,5 +315,71 @@ export class AdminRidersRepository {
     } finally {
       client.release()
     }
+  }
+
+  // ─── COD COLLECTIONS + SETTLEMENTS (Big Phase 14) ───
+
+  async getCollectionsForAdmin(riderId) {
+    const { rows } = await query(
+      `SELECT dc.*, o.order_number
+       FROM delivery_collections dc
+       JOIN orders o ON o.id = dc.order_id
+       WHERE dc.rider_id = $1
+       ORDER BY dc.collected_at DESC
+       LIMIT 200`,
+      [riderId]
+    )
+    return rows
+  }
+
+  async getSettlements(riderId) {
+    const { rows } = await query(
+      `SELECT * FROM rider_cash_settlements
+       WHERE rider_id = $1
+       ORDER BY created_at DESC
+       LIMIT 100`,
+      [riderId]
+    )
+    return rows
+  }
+
+  /**
+   * Records a settlement and flips the rider's COLLECTED cash rows to
+   * SETTLED in one transaction. Returns the settlement row.
+   */
+  async createSettlement({ riderId, amount, method, reference, settledBy }) {
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const { rows: [settlement] } = await client.query(
+        `INSERT INTO rider_cash_settlements (rider_id, amount, method, reference, status, settled_by)
+         VALUES ($1, $2, $3, $4, 'SETTLED', $5)
+         RETURNING *`,
+        [riderId, amount, method, reference, settledBy]
+      )
+      await client.query(
+        `UPDATE delivery_collections
+         SET status = 'SETTLED', updated_at = NOW()
+         WHERE rider_id = $1 AND status = 'COLLECTED' AND cash_amount > 0`,
+        [riderId]
+      )
+      await client.query('COMMIT')
+      return settlement
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
+  }
+
+  async setBusinessUpi(riderId, businessUpiId) {
+    const { rows } = await query(
+      `UPDATE rider_profiles SET business_upi_id = $1, updated_at = NOW()
+       WHERE user_id = $2
+       RETURNING user_id, business_upi_id`,
+      [businessUpiId, riderId]
+    )
+    return rows[0] || null
   }
 }

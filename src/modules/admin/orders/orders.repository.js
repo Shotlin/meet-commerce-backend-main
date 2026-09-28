@@ -478,7 +478,7 @@ export class AdminOrdersRepository {
     }
   }
 
-  async createManualOrder({ userId, items, paymentMethod, deliveryAddress, couponCode, adminId }) {
+  async createManualOrder({ userId, items, paymentMethod, deliveryAddress, couponCode, adminId, shopId }) {
     const client = await getClient()
     try {
       await client.query('BEGIN')
@@ -511,14 +511,15 @@ export class AdminOrdersRepository {
       const orderNumber = `ORD-${Date.now().toString(36).toUpperCase()}`
 
       const { rows: [order] } = await client.query(
-        `INSERT INTO orders (order_number, customer_id, status, items, subtotal, total_payable, payment_method, payment_status, delivery_address)
-         VALUES ($1, $2, 'CONFIRMED', $3, $4, $5, $6, $7, $8)
+        `INSERT INTO orders (order_number, customer_id, shop_id, status, items, subtotal, total_payable, payment_method, payment_status, delivery_address)
+         VALUES ($1, $2, $9, 'CONFIRMED', $3, $4, $5, $6, $7, $8)
          RETURNING *`,
         [
           orderNumber, userId, JSON.stringify(orderItems),
           subtotal, subtotal, paymentMethod || 'MANUAL',
           paymentMethod === 'COD' ? 'PENDING' : 'PAID',
           JSON.stringify(deliveryAddress),
+          shopId || null,
         ]
       )
 

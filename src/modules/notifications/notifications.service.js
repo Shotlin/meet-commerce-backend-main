@@ -71,7 +71,13 @@ export class NotificationsService {
    * Send notification — creates in-app + sends push + emits Socket.IO
    * Called by other modules (orders, delivery, etc.)
    */
-  async sendNotification(userId, { title, body, type = 'general', data = {} }) {
+  // `channelId`/`sound` are optional overrides for the Android notification
+  // channel + sound a push renders with — every caller that omits them gets
+  // the existing shared default (`sendPush`'s own fallback), so this stays
+  // backward-compatible for every notification type except the ones that
+  // deliberately opt into a louder, distinct alert (currently only
+  // ProcurementNotifier.requestPublished — see its own comment).
+  async sendNotification(userId, { title, body, type = 'general', data = {}, channelId, sound }) {
     // 1. Create in-app notification
     const notification = await this.repository.createNotification(userId, {
       title, body, type, data,
@@ -91,8 +97,11 @@ export class NotificationsService {
       const tokens = await this.repository.getFcmTokens(userId)
       if (tokens.length > 0) {
         const tokenStrings = tokens.map(t => t.token)
+        const pushOptions = { title, body, data: { ...data, notificationId: notification.id } }
+        if (channelId) pushOptions.channelId = channelId
+        if (sound) pushOptions.sound = sound
         for (const token of tokenStrings) {
-          await sendPush(token, { title, body, data: { ...data, notificationId: notification.id } })
+          await sendPush(token, pushOptions)
         }
       }
     } catch (err) {

@@ -73,7 +73,7 @@ const IN_TRANSIT_ASSIGNMENT = {
   assignment_id: 'assign-1',
   status: 'IN_TRANSIT',
   order_id: 'order-1',
-  total_amount: 380,
+  total_payable: 380,
   payment_method: 'COD',
 }
 

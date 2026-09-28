@@ -154,6 +154,7 @@ export const manualOrderSchema = {
     required: ['userId', 'items', 'deliveryAddress'],
     properties: {
       userId: { type: 'string', format: 'uuid' },
+      shopId: { type: 'string', format: 'uuid' },
       items: {
         type: 'array', minItems: 1,
         items: {

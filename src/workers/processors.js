@@ -468,12 +468,12 @@ async function handleAutoAssign({ orderId, source = 'SYSTEM' }) {
   }
 
   const { rows: orderRows } = await query(
-    `SELECT o.id, o.order_number, o.status, o.rider_id, o.total_amount, o.payment_method,
+    `SELECT o.id, o.order_number, o.status, o.rider_id, o.total_payable, o.payment_method,
             o.delivery_fee, o.shop_id,
             o.items, o.delivery_address, o.created_at,
             u.name AS customer_name, u.phone AS customer_phone
      FROM orders o
-     LEFT JOIN users u ON u.id = o.user_id
+     LEFT JOIN users u ON u.id = o.customer_id
      WHERE o.id = $1
      LIMIT 1`,
     [orderId]
