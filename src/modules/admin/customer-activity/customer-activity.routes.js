@@ -3,6 +3,7 @@ import { CustomerActivityService } from './customer-activity.service.js'
 import { CustomerActivityRepository } from './customer-activity.repository.js'
 import {
   resolveCustomerActivityUserSchema,
+  searchCustomerActivityUsersSchema,
   getCustomerActivityTimelineSchema,
 } from './customer-activity.schema.js'
 
@@ -28,6 +29,11 @@ export default async function customerActivityRoutes(fastify) {
   fastify.get('/resolve-user', {
     schema: resolveCustomerActivityUserSchema,
   }, controller.resolveUser.bind(controller))
+
+  // GET /search-users — Real-time search-as-you-type suggestions
+  fastify.get('/search-users', {
+    schema: searchCustomerActivityUsersSchema,
+  }, controller.searchUsers.bind(controller))
 
   // GET /:userId/timeline — Paginated, filterable activity timeline
   fastify.get('/:userId/timeline', {

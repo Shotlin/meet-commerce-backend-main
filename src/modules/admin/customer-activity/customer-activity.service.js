@@ -17,6 +17,11 @@ export class CustomerActivityService {
     return { success: true, user }
   }
 
+  /** Real-time search-as-you-type suggestions (see repository for matching rules). */
+  async searchUsers(input) {
+    return this.repo.searchUsers(input)
+  }
+
   /**
    * Paginated, filterable activity timeline for one user.
    */

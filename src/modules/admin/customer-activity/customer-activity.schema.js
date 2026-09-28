@@ -23,6 +23,19 @@ export const resolveCustomerActivityUserSchema = {
   },
 }
 
+export const searchCustomerActivityUsersSchema = {
+  tags: ['Admin', 'Customer Activity'],
+  summary: 'Real-time search-as-you-type customer suggestions by name, phone, or user ID [ADMIN]',
+  security: [{ bearerAuth: [] }],
+  querystring: {
+    type: 'object',
+    required: ['query'],
+    properties: {
+      query: { type: 'string', minLength: 1, maxLength: 100 },
+    },
+  },
+}
+
 export const getCustomerActivityTimelineSchema = {
   tags: ['Admin', 'Customer Activity'],
   summary: "Paginated, filterable activity timeline for one customer [ADMIN]",

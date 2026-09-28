@@ -14,6 +14,12 @@ export class CustomerActivityController {
     return reply.send(success(result.user, 'User found'))
   }
 
+  /** GET /search-users — Real-time search-as-you-type suggestions */
+  async searchUsers(request, reply) {
+    const users = await this.service.searchUsers(request.query.query)
+    return reply.send(success(users, 'Users found'))
+  }
+
   /** GET /:userId/timeline — Paginated, filterable activity timeline */
   async getTimeline(request, reply) {
     const { events, pagination } = await this.service.getTimeline(

@@ -5,10 +5,32 @@ import { CustomerActivityService } from '../../../src/modules/admin/customer-act
 function makeRepoMock(overrides = {}) {
   return {
     resolveUser: vi.fn().mockResolvedValue({ id: 'user-1', name: 'Ashish', phone: '6354302166' }),
+    searchUsers: vi.fn().mockResolvedValue([{ id: 'user-1', name: 'Ashish', phone: '6354302166' }]),
     getTimeline: vi.fn().mockResolvedValue({ events: [], total: 0 }),
     ...overrides,
   }
 }
+
+describe('CustomerActivityService.searchUsers', () => {
+  it('forwards the raw query to the repository and returns its results', async () => {
+    const repo = makeRepoMock()
+    const service = new CustomerActivityService(repo)
+
+    const result = await service.searchUsers('980000')
+
+    expect(repo.searchUsers).toHaveBeenCalledWith('980000')
+    expect(result).toEqual([{ id: 'user-1', name: 'Ashish', phone: '6354302166' }])
+  })
+
+  it('returns an empty array when nothing matches, never throwing', async () => {
+    const repo = makeRepoMock({ searchUsers: vi.fn().mockResolvedValue([]) })
+    const service = new CustomerActivityService(repo)
+
+    const result = await service.searchUsers('zzzzzz')
+
+    expect(result).toEqual([])
+  })
+})
 
 describe('CustomerActivityService.resolveUser', () => {
   it('returns success with the user when found', async () => {

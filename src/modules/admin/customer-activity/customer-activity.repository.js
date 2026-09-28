@@ -4,6 +4,21 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const PHONE_RE = /^[6-9]\d{9}$/
 
 /**
+ * Strip everything but digits, then strip a leading country/trunk prefix
+ * (`91`/`+91` or a leading `0`) so `+91 98000 00001`, `919800000001`, and
+ * `09800000001` all normalize to the same bare 10-digit form the app
+ * actually stores in `users.phone` (see validatePhone.js) — pasting a
+ * number copied from anywhere else in the dashboard (which sometimes shows
+ * a `+91` prefix) previously failed to match at all.
+ */
+function normalizePhoneDigits(input) {
+  let digits = String(input || '').replace(/\D/g, '')
+  if (digits.length === 12 && digits.startsWith('91')) digits = digits.slice(2)
+  else if (digits.length === 11 && digits.startsWith('0')) digits = digits.slice(1)
+  return digits
+}
+
+/**
  * Customer Activity repository — resolves a User ID/phone to a real user,
  * then builds a single chronological timeline out of every table that
  * records something a customer actually did. One UNION ALL CTE (not N
@@ -22,21 +37,81 @@ export class CustomerActivityRepository {
    */
   async resolveUser(input) {
     if (!input) return null
-    if (UUID_RE.test(input)) {
+    const trimmed = String(input).trim()
+    if (UUID_RE.test(trimmed)) {
       const { rows } = await query(
         `SELECT id, name, phone, role, created_at, last_active_at FROM users WHERE id = $1`,
-        [input]
+        [trimmed]
       )
       return rows[0] || null
     }
-    if (PHONE_RE.test(input)) {
+    const digits = normalizePhoneDigits(trimmed)
+    if (PHONE_RE.test(digits)) {
       const { rows } = await query(
         `SELECT id, name, phone, role, created_at, last_active_at FROM users WHERE phone = $1`,
-        [input]
+        [digits]
       )
       return rows[0] || null
     }
     return null
+  }
+
+  /**
+   * Real search-as-you-type suggestions — the counterpart to `resolveUser`
+   * above (which only ever matches a COMPLETE user id or a COMPLETE
+   * 10-digit phone number). An admin typing a partial phone number, a
+   * name, or a phone with a `+91`/leading-zero prefix previously got
+   * nothing at all until the very last correct digit was typed, with no
+   * feedback in between — this returns up to `limit` real candidate users
+   * as the admin types, same shape as `resolveUser`'s single result.
+   */
+  async searchUsers(input, limit = 8) {
+    const trimmed = String(input || '').trim()
+    if (trimmed.length < 2) return []
+
+    if (UUID_RE.test(trimmed)) {
+      const user = await this.resolveUser(trimmed)
+      return user ? [user] : []
+    }
+
+    const digits = normalizePhoneDigits(trimmed)
+    const clauses = []
+    const params = []
+
+    if (digits.length >= 3) {
+      params.push(`%${digits}%`)
+      clauses.push(`phone ILIKE $${params.length}`)
+    }
+    if (trimmed.length >= 2) {
+      params.push(`%${trimmed}%`)
+      clauses.push(`name ILIKE $${params.length}`)
+    }
+    if (clauses.length === 0) return []
+
+    // Exact phone match first, then longest-common-prefix-ish (a phone
+    // starting with what was typed) ahead of a mid-string match, then most
+    // recently active — so the customer the admin is actually looking for
+    // reliably surfaces near the top of a short list instead of in
+    // whatever order Postgres happens to return matching rows.
+    params.push(digits || '')
+    const exactIdx = params.length
+    params.push(digits ? `${digits}%` : '')
+    const prefixIdx = params.length
+    params.push(limit)
+    const limitIdx = params.length
+
+    const { rows } = await query(
+      `SELECT id, name, phone, role, created_at, last_active_at
+         FROM users
+        WHERE ${clauses.join(' OR ')}
+        ORDER BY
+          (phone = $${exactIdx}) DESC,
+          (phone LIKE $${prefixIdx}) DESC,
+          last_active_at DESC NULLS LAST
+        LIMIT $${limitIdx}`,
+      params
+    )
+    return rows
   }
 
   /**
