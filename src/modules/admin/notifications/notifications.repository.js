@@ -307,7 +307,7 @@ function buildSegmentWhere(segment, segmentValue) {
     case 'inactive':
       return {
         where: `${customerBaseWhere} AND u.id NOT IN (
-          SELECT DISTINCT user_id FROM orders WHERE created_at >= NOW() - INTERVAL '30 days'
+          SELECT DISTINCT customer_id FROM orders WHERE created_at >= NOW() - INTERVAL '30 days'
         )`,
         params,
       }
@@ -315,8 +315,8 @@ function buildSegmentWhere(segment, segmentValue) {
     case 'high_value':
       return {
         where: `${customerBaseWhere} AND u.id IN (
-          SELECT user_id FROM orders WHERE status = 'DELIVERED'
-          GROUP BY user_id HAVING SUM(total) >= 5000
+          SELECT customer_id FROM orders WHERE status = 'DELIVERED'
+          GROUP BY customer_id HAVING SUM(total_payable) >= 5000
         )`,
         params,
       }
@@ -340,7 +340,7 @@ function buildSegmentWhere(segment, segmentValue) {
         params.push(segmentValue)
         return {
           where: `${customerBaseWhere} AND u.id IN (
-            SELECT DISTINCT user_id FROM orders WHERE shop_id = $${params.length}
+            SELECT DISTINCT customer_id FROM orders WHERE shop_id = $${params.length}
           )`,
           params,
         }
