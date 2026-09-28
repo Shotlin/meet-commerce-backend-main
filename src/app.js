@@ -496,6 +496,16 @@ export const buildApp = async () => {
     },
   );
 
+  // GET /api/v1/notifications/event-flags — a second plugin sharing the
+  // same prefix as the module above (no path collision); the customer-
+  // facing half of order-notification-settings (migration 144).
+  const { orderNotificationEventFlagsRoutes } = await import(
+    "./modules/order-notification-settings/order-notification-settings.routes.js"
+  );
+  await app.register(orderNotificationEventFlagsRoutes, {
+    prefix: "/api/v1/notifications",
+  });
+
   // ─── CART ENHANCEMENT MODULES ──────────────────────────
 
   // Tip Presets (public)
@@ -557,6 +567,16 @@ export const buildApp = async () => {
     await import("./modules/support-settings/support-settings.routes.js");
   await app.register(adminSupportSettingsRoutes, {
     prefix: "/api/v1/admin/support-settings",
+  });
+
+  // Order Notification Settings (admin) — per-lifecycle-event editable
+  // title/message + independent notification/banner enabled toggles
+  // (migration 144).
+  const { adminOrderNotificationSettingsRoutes } = await import(
+    "./modules/order-notification-settings/order-notification-settings.routes.js"
+  );
+  await app.register(adminOrderNotificationSettingsRoutes, {
+    prefix: "/api/v1/admin/order-notification-settings",
   });
 
   // Delivery Calendar (admin) — weekly template + per-date overrides

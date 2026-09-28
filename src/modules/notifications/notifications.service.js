@@ -78,6 +78,44 @@ export class NotificationsService {
   // deliberately opt into a louder, distinct alert (currently only
   // ProcurementNotifier.requestPublished — see its own comment).
   async sendNotification(userId, { title, body, type = 'general', data = {}, channelId, sound }) {
+    // Order-lifecycle events (customer-order-event.helper.js's output,
+    // type:'ORDER_STATUS' + data.timelineType) go through the admin-
+    // configurable settings (migration 144) before anything else happens:
+    // an admin edit overrides the title/body actually sent, and turning
+    // the event off suppresses the whole send (in-app row + socket + push)
+    // — not just the push — matching the dashboard's single "Enabled"
+    // toggle semantics. A missing settings row (shouldn't happen once the
+    // migration has run, but defensive) falls through to whatever the
+    // caller already built, unchanged.
+    if (type === 'ORDER_STATUS' && data?.timelineType) {
+      try {
+        const { OrderNotificationSettingsRepository } = await import(
+          '../order-notification-settings/order-notification-settings.repository.js'
+        )
+        const { interpolateOrderNotificationTemplate } = await import(
+          '../order-notification-settings/order-notification-settings.constants.js'
+        )
+        const settings = await new OrderNotificationSettingsRepository().getByEventKey(data.timelineType)
+        if (settings) {
+          if (settings.notification_enabled === false) {
+            logger.debug({ userId, timelineType: data.timelineType }, 'Order notification suppressed — event turned off in settings')
+            return null
+          }
+          title = interpolateOrderNotificationTemplate(settings.title, data)
+          body = interpolateOrderNotificationTemplate(settings.message, data)
+          // PICKED_UP's delivery OTP suffix is appended mechanically, never
+          // exposed as admin-editable template text — a real, sensitive
+          // one-time code should never live inside free-text an admin
+          // could accidentally mistype or drop.
+          if (data.timelineType === 'PICKED_UP' && data.deliveryOtp) {
+            body += ` Your delivery OTP is ${data.deliveryOtp} — share it with your delivery partner when they arrive.`
+          }
+        }
+      } catch (err) {
+        logger.error({ err, userId, timelineType: data.timelineType }, 'Order notification settings lookup failed — sending with the caller-supplied default')
+      }
+    }
+
     // 1. Create in-app notification
     const notification = await this.repository.createNotification(userId, {
       title, body, type, data,
