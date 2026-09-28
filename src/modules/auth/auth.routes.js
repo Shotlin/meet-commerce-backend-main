@@ -2,6 +2,7 @@ import { AuthController } from './auth.controller.js'
 import { AuthService } from './auth.service.js'
 import { AuthRepository } from './auth.repository.js'
 import { validatePhone } from '../../middlewares/validatePhone.js'
+import { otpRateLimit } from './otp-rate-limit.js'
 import {
   sendOtpSchema,
   verifyOtpSchema,
@@ -27,10 +28,7 @@ export default async function authRoutes(fastify) {
     schema: sendOtpSchema,
     preHandler: [validatePhone],
     config: {
-      rateLimit: {
-        max: 5,
-        timeWindow: '5 minutes',
-      },
+      rateLimit: otpRateLimit(service, 5),
     },
   }, controller.sendOtp.bind(controller))
 
@@ -39,10 +37,7 @@ export default async function authRoutes(fastify) {
     schema: verifyOtpSchema,
     preHandler: [validatePhone],
     config: {
-      rateLimit: {
-        max: 10,
-        timeWindow: '5 minutes',
-      },
+      rateLimit: otpRateLimit(service, 10),
     },
   }, controller.verifyOtp.bind(controller))
 
