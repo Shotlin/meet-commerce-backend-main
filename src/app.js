@@ -285,6 +285,11 @@ export const buildApp = async () => {
     },
   );
 
+  // Shiprocket settings [ADMIN] — dashboard-managed API-user credentials
+  await app.register(import("./modules/shiprocket/shiprocket.routes.js"), {
+    prefix: "/api/v1/admin/shiprocket",
+  });
+
   // Admin — fully implemented
   await app.register(import("./modules/admin/admin.routes.js"), {
     prefix: "/api/v1/admin",
