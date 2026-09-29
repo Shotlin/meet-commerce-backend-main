@@ -33,7 +33,15 @@ export class ShiprocketService {
 
   async save(input, adminId) {
     const row = await this.repository.save(input, adminId)
-    emit('shiprocket_settings.save', { userId: adminId })
+    emit('shiprocket_settings_updated', {
+      actor_user_id: adminId,
+      target_type: 'shiprocket_settings',
+      after: {
+        emailChanged: input?.email !== undefined,
+        passwordChanged: input?.password !== undefined,
+        pickupLocation: input?.pickupLocation,
+      },
+    })
     return toView(row)
   }
 

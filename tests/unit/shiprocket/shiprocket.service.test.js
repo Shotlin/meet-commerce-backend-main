@@ -50,6 +50,15 @@ describe('ShiprocketService', () => {
     expect(r.recordTest).not.toHaveBeenCalled()
   })
 
+  it('save audits with the required target_type and never logs the password', async () => {
+    const { emit } = await import('../../../src/utils/audit-log.js')
+    await new ShiprocketService(repo()).save({ email: 'a@b.com', password: 'secret-pw' }, 'admin')
+    const [action, payload] = emit.mock.calls.at(-1)
+    expect(action).toBe('shiprocket_settings_updated')
+    expect(payload.target_type).toBe('shiprocket_settings')
+    expect(JSON.stringify(payload)).not.toContain('secret-pw')
+  })
+
   it('rejects testing when nothing is saved', async () => {
     const r = repo({ getCredentialsDecrypted: vi.fn().mockResolvedValue(null) })
     await expect(new ShiprocketService(r).test({}, 'a')).rejects.toMatchObject({ statusCode: 400 })
