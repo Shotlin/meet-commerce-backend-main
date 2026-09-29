@@ -150,7 +150,7 @@ export class AuthController {
    * POST /logout
    */
   async logout(request, reply) {
-    await this.service.logout(request.user.id)
+    await this.service.logout(request.user.id, request.user.role)
 
     reply.clearCookie('refreshToken', { path: '/api/v1/auth' })
 

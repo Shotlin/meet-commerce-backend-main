@@ -14,6 +14,36 @@ const SMS_SESSION_PREFIX = 'sms:session:'
 // Requirement 13.3
 const TEMP_TOKEN_EXPIRY = '10m'
 
+/**
+ * The role a session ACTS as is decided by the app that logged in, never by
+ * overwriting the stored `users.role`. One phone number can be a customer, a
+ * rider and a vendor at once; each app gets a session for its own role and
+ * none of them changes the account for the others.
+ *
+ *  - rider app (requested RIDER/DELIVERY) → 'RIDER' for a customer/rider account
+ *  - any other app → the stored role, except a legacy account whose stored role
+ *    was flipped to RIDER acts as CUSTOMER (it is a customer in the customer app)
+ *  - HQ/admin/staff roles are never re-labelled.
+ */
+export function resolveActingRole(storedRole, requestedRole) {
+  const stored = storedRole || 'CUSTOMER'
+  if (requestedRole === 'RIDER') {
+    return stored === 'CUSTOMER' || stored === 'RIDER' ? 'RIDER' : stored
+  }
+  return stored === 'RIDER' ? 'CUSTOMER' : stored
+}
+
+/**
+ * Refresh tokens are kept per acting role so the customer and rider apps (same
+ * user id) do not invalidate each other's session. The CUSTOMER key is the
+ * historical `refresh:{id}` so existing sessions keep working.
+ */
+export function refreshKeyFor(userId, role) {
+  return role === 'RIDER'
+    ? `${REFRESH_TOKEN_PREFIX}${userId}:RIDER`
+    : `${REFRESH_TOKEN_PREFIX}${userId}`
+}
+
 function normalizePhoneForOtp(phone) {
   const digits = `${phone || ''}`.replace(/\D/g, '')
   if (digits.startsWith('91') && digits.length === 12) return digits.slice(2)
@@ -158,26 +188,26 @@ export class AuthService {
     let isNewUser = false
 
     if (!user) {
-      user = await this.repo.createUser(phone, requestedRole || 'CUSTOMER')
+      // Base identity is always CUSTOMER; the rider app acts as RIDER by app
+      // (resolveActingRole), it does not store a different role.
+      user = await this.repo.createUser(phone, 'CUSTOMER')
       isNewUser = true
       logger.info({ userId: user.id, role: user.role }, 'New user registered')
 
       // Auto-create rider_profile for new RIDER registrations
-      if (user.role === 'RIDER') {
+      if (requestedRole === 'RIDER') {
         await this.repo.ensureRiderProfile(user.id, { isApproved: isDemoRider })
         logger.info({ userId: user.id, isDemoRider }, 'Auto-created rider_profile for new rider')
       }
-    } else if (requestedRole === 'RIDER' && user.role === 'CUSTOMER') {
-      // Existing customer registering as rider via rider app
-      await this.repo.updateRole(user.id, 'RIDER')
-      user.role = 'RIDER'
+    } else if (requestedRole === 'RIDER' && (user.role === 'CUSTOMER' || user.role === 'RIDER')) {
+      // Existing customer (or rider) using the rider app: give them a rider
+      // profile but DO NOT change users.role — they stay a customer in the
+      // customer app. The rider session below acts as RIDER by app.
       await this.repo.ensureRiderProfile(user.id, { isApproved: isDemoRider })
-      logger.info({ userId: user.id }, 'Upgraded CUSTOMER to RIDER with rider_profile')
-    } else if (isDemoRider && user.role === 'RIDER') {
-      // Returning demo rider — make sure a pre-existing profile is approved
-      // (covers accounts created before demo phones were configured).
-      await this.repo.ensureRiderProfile(user.id, { isApproved: true })
     }
+
+    // Acting role for THIS session (in-memory only; never persisted).
+    user.role = resolveActingRole(user.role, requestedRole)
 
     // Check if user is blocked
     if (!user.is_active) {
@@ -227,7 +257,7 @@ export class AuthService {
         role: user.role,
       })
       await redis.set(
-        `${REFRESH_TOKEN_PREFIX}${user.id}`,
+        refreshKeyFor(user.id, user.role),
         refreshToken,
         'EX',
         7 * 24 * 60 * 60
@@ -308,7 +338,7 @@ export class AuthService {
     // role maps (ROLE_PERMISSIONS), vendorId enables vendor-scope middleware.
     let vendorMemberships = []
     try {
-      vendorMemberships = await this.repo.findActiveVendorUsersByUserId(user.id)
+      if (user.role !== 'RIDER') vendorMemberships = await this.repo.findActiveVendorUsersByUserId(user.id)
     } catch (err) {
       logger.warn(
         { err: err.message, userId: user.id, action: 'vendor_users_lookup_failed' },
@@ -342,7 +372,7 @@ export class AuthService {
         { expiresIn: '24h' }
       )
       const refreshToken = signRefreshToken({ id: user.id, phone: user.phone, role: user.role })
-      await redis.set(`${REFRESH_TOKEN_PREFIX}${user.id}`, refreshToken, 'EX', 7 * 24 * 60 * 60)
+      await redis.set(refreshKeyFor(user.id, user.role), refreshToken, 'EX', 7 * 24 * 60 * 60)
 
       logger.info(
         { userId: user.id, vendorId, vendorRoles, action: 'vendor_login_scoped' },
@@ -375,7 +405,7 @@ export class AuthService {
 
     // Store refresh token in Redis (for invalidation on logout)
     await redis.set(
-      `${REFRESH_TOKEN_PREFIX}${user.id}`,
+      refreshKeyFor(user.id, user.role),
       tokens.refreshToken,
       'EX',
       7 * 24 * 60 * 60 // 7 days
@@ -414,7 +444,11 @@ export class AuthService {
       const decoded = verifyToken(refreshToken, env.JWT_REFRESH_SECRET)
 
       // Check if refresh token is still valid in Redis
-      const stored = await redis.get(`${REFRESH_TOKEN_PREFIX}${decoded.id}`)
+      // The refresh token carries the acting role it was issued for, so a
+      // rider-app session refreshes as RIDER and a customer-app one as
+      // CUSTOMER — independent keys, independent lifetimes.
+      const requestedRole = decoded.role === 'RIDER' ? 'RIDER' : null
+      const stored = await redis.get(refreshKeyFor(decoded.id, requestedRole))
       if (!stored || stored !== refreshToken) {
         return { success: false, message: 'Invalid or expired refresh token' }
       }
@@ -426,12 +460,13 @@ export class AuthService {
       }
 
       // Generate new token pair (rotate refresh token)
-      const payload = { id: user.id, phone: user.phone, role: user.role }
+      const actingRole = resolveActingRole(user.role, requestedRole)
+      const payload = { id: user.id, phone: user.phone, role: actingRole }
       const tokens = generateTokenPair(payload)
 
       // Update refresh token in Redis
       await redis.set(
-        `${REFRESH_TOKEN_PREFIX}${user.id}`,
+        refreshKeyFor(user.id, actingRole),
         tokens.refreshToken,
         'EX',
         7 * 24 * 60 * 60
@@ -451,8 +486,9 @@ export class AuthService {
   /**
    * Logout — invalidate refresh token
    */
-  async logout(userId) {
-    await redis.del(`${REFRESH_TOKEN_PREFIX}${userId}`)
+  async logout(userId, role) {
+    // Only this app's session ends; the same account's other apps stay signed in.
+    await redis.del(refreshKeyFor(userId, role))
     logger.info({ userId }, 'User logged out')
   }
 
@@ -461,7 +497,7 @@ export class AuthService {
    */
   async deleteAccount(userId) {
     await this.repo.deleteUser(userId)
-    await redis.del(`${REFRESH_TOKEN_PREFIX}${userId}`)
+    await redis.del(refreshKeyFor(userId, 'CUSTOMER'), refreshKeyFor(userId, 'RIDER'))
     logger.info({ userId }, 'User account deleted')
   }
 
