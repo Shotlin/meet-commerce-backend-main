@@ -18,7 +18,8 @@ export function assessEligibility({ order, shop, shipment }) {
   if (order.payment_method === 'COD') return 'COD orders are not available on Shiprocket — only prepaid orders'
   if (order.payment_status !== 'PAID') return 'Payment is not completed yet — only paid (prepaid) orders can be assigned'
   if (TERMINAL_ORDER_STATUSES.includes(order.status)) return `Order is already ${order.status}`
-  if (isLiveShipment(shipment)) return 'Already assigned to Shiprocket'
+  // A row without a Shiprocket shipment id never reached Shiprocket — it must stay retryable.
+  if (isLiveShipment(shipment) && shipment.sr_shipment_id) return 'Already assigned to Shiprocket'
   if (order.rider_id) return 'Already assigned to one of your own riders'
   const a = order.delivery_address || {}
   if (!a.lat || !a.lng) return 'Delivery address has no map location'

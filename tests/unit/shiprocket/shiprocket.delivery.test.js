@@ -16,7 +16,9 @@ describe('assessEligibility (prepaid-only rule)', () => {
   it('rejects unpaid orders', () => expect(assessEligibility({ order: { ...order, payment_status: 'PENDING' }, shop })).toMatch(/not completed/))
   it('rejects delivered/cancelled orders', () => expect(assessEligibility({ order: { ...order, status: 'DELIVERED' }, shop })).toMatch(/DELIVERED/))
   it('rejects an already-live shipment but allows retry after failure/cancel', () => {
-    expect(assessEligibility({ order, shop, shipment: { status: 'ASSIGNING' } })).toMatch(/Already assigned/)
+    expect(assessEligibility({ order, shop, shipment: { status: 'ASSIGNING', sr_shipment_id: 222 } })).toMatch(/Already assigned/)
+    // a half-created row (Shiprocket never returned an id) must stay retryable
+    expect(assessEligibility({ order, shop, shipment: { status: 'CREATED', sr_shipment_id: null } })).toBeNull()
     expect(assessEligibility({ order, shop, shipment: { status: 'FAILED' } })).toBeNull()
     expect(assessEligibility({ order, shop, shipment: { status: 'CANCELLED' } })).toBeNull()
   })

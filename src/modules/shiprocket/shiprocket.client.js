@@ -32,8 +32,16 @@ export class ShiprocketClient {
     const text = await res.text()
     let data = null
     try { data = text ? JSON.parse(text) : null } catch { data = { raw: text } }
-    if (!res.ok) {
-      throw new ShiprocketError(data?.message || `Shiprocket responded ${res.status}`, res.status)
+    // Shiprocket sometimes answers HTTP 200 with a failure body ({status_code:422, message, errors}).
+    const bodyCode = Number(data?.status_code)
+    if (!res.ok || (Number.isFinite(bodyCode) && bodyCode >= 400)) {
+      const details = data?.errors
+        ? ` (${Object.entries(data.errors).map(([k, v]) => `${k}: ${[].concat(v).join(', ')}`).join('; ')})`
+        : ''
+      throw new ShiprocketError(
+        `${data?.message || `Shiprocket responded ${res.status}`}${details}`,
+        res.ok ? bodyCode : res.status
+      )
     }
     return data
   }

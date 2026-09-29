@@ -90,7 +90,8 @@ export class ShiprocketOrdersService {
     const { client, creds } = await this.#client()
     if (!creds.pickupLocation) throw fail('Set the default pickup location in Shiprocket settings first')
 
-    const attempt = shipment ? Number(String(shipment.sr_order_ref).split('-R')[1] || 0) + 1 : 0
+    // Only bump the id suffix if the previous attempt really created an order at Shiprocket.
+    const attempt = shipment?.sr_order_id ? Number(String(shipment.sr_order_ref).split('-R')[1] || 0) + 1 : Number(String(shipment?.sr_order_ref || '').split('-R')[1] || 0)
     const srOrderRef = buildSrOrderRef(order.order_number, attempt)
     const payload = buildQuickOrderPayload({
       order, shop, items, pickupLocation: creds.pickupLocation, srOrderRef,
@@ -103,6 +104,12 @@ export class ShiprocketOrdersService {
     } catch (err) {
       await this.#saveFailure(orderId, srOrderRef, err.message, adminId)
       throw fail(`Shiprocket rejected the order: ${err.message}`, 502)
+    }
+    if (!created?.order_id || !created?.shipment_id) {
+      const detail = String(created?.message || JSON.stringify(created) || 'empty response').slice(0, 300)
+      await this.#saveFailure(orderId, srOrderRef, `Shiprocket did not return an order id: ${detail}`, adminId)
+      logger.warn({ orderId, response: created }, 'Shiprocket create returned no order/shipment id')
+      throw fail(`Shiprocket did not create the order: ${detail}`, 502)
     }
     const row = await this.#upsert(orderId, {
       sr_order_ref: srOrderRef, sr_order_id: created.order_id, sr_shipment_id: created.shipment_id,
