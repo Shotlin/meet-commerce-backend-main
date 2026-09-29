@@ -64,4 +64,43 @@ export class ShiprocketClient {
     const data = await this.request('/settings/company/pickup')
     return data?.data?.shipping_address || []
   }
+
+  /** Quick (hyperlocal) availability + rate between two coordinates. */
+  async checkQuick({ pickupPostcode, deliveryPostcode, fromLat, fromLng, toLat, toLng, cod = 0 }) {
+    const qs = new URLSearchParams({
+      pickup_postcode: String(pickupPostcode),
+      delivery_postcode: String(deliveryPostcode),
+      cod: String(cod),
+      weight: '2',
+      is_new_hyperlocal: '1',
+      lat_from: String(fromLat),
+      long_from: String(fromLng),
+      lat_to: String(toLat),
+      long_to: String(toLng),
+    })
+    const data = await this.request(`/courier/serviceability/?${qs}`)
+    const list = data?.data?.available_courier_companies || data?.data || []
+    return Array.isArray(list) ? list : []
+  }
+
+  createQuickOrder(payload) {
+    return this.request('/orders/create/adhoc', { method: 'POST', body: payload })
+  }
+
+  assignAwb(shipmentId) {
+    return this.request('/courier/assign/awb', { method: 'POST', body: { shipment_id: shipmentId } })
+  }
+
+  trackShipment(shipmentId) {
+    return this.request(`/courier/track/shipment/${shipmentId}`)
+  }
+
+  cancelOrders(orderIds) {
+    return this.request('/orders/cancel', { method: 'POST', body: { ids: orderIds } })
+  }
+
+  async walletBalance() {
+    const data = await this.request('/account/details/wallet-balance')
+    return data?.data?.balance_amount ?? null
+  }
 }

@@ -5,6 +5,7 @@ import { closeRedis } from './config/redis.js'
 import { logger } from './config/logger.js'
 import { runPermissionAudit } from './utils/permission-audit.js'
 import { refreshRazorpayClient } from './config/razorpay.js'
+import { ShiprocketOrdersService } from './modules/shiprocket/shiprocket.orders.service.js'
 import { startCampaignScheduler, stopCampaignScheduler } from './workers/campaign-scheduler.worker.js'
 import { startPaymentExpiryWorker, stopPaymentExpiryWorker } from './workers/payment-expiry.worker.js'
 import {
@@ -70,6 +71,10 @@ const start = async () => {
     if (app.io) {
       logger.info(`🔌 Socket.IO ready on ws://${env.HOST}:${env.PORT}`)
     }
+
+    // Shiprocket Quick tracking poller (no-op while nothing is active)
+    const shiprocketOrders = new ShiprocketOrdersService()
+    setInterval(() => { shiprocketOrders.syncActive().catch(() => {}) }, 60_000).unref()
 
     // Start campaign scheduler poller
     startCampaignScheduler()

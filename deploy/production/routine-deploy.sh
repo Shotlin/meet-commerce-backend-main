@@ -60,6 +60,17 @@ for svc in api worker migrate; do
   sudo docker tag "freshcuts-${svc}:latest" "freshcuts-${svc}:rollback-pre-${TARGET_SHA}" 2>/dev/null || true
 done
 
+echo "=== Cleanup (keep 2 newest rollback tags per service + 5 newest DB dumps) ==="
+for svc in api worker migrate; do
+  sudo docker images "freshcuts-${svc}" --format '{{.CreatedAt}}|{{.Tag}}' \
+    | grep '|rollback-pre-' | sort -r | tail -n +3 | cut -d'|' -f2 \
+    | xargs -r -I{} sudo docker rmi "freshcuts-${svc}:{}" >/dev/null 2>&1 || true
+done
+sudo docker image prune -f >/dev/null 2>&1 || true
+sudo docker builder prune -af >/dev/null 2>&1 || true
+sudo ls -1t "${BACKUP_DIR}"/pre-deploy-*.dump 2>/dev/null | tail -n +6 | xargs -r sudo rm -f || true
+df -h / | tail -1
+
 echo "=== Deploy ==="
 sudo -u bakalooops git checkout -f -B main origin/main
 ${COMPOSE} build api worker migrate

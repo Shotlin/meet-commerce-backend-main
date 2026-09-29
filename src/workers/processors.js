@@ -477,7 +477,8 @@ async function handleAutoAssign({ orderId, source = 'SYSTEM' }) {
             o.wallet_amount, o.payment_status,
             o.delivery_fee, o.shop_id,
             o.items, o.delivery_address, o.created_at,
-            u.name AS customer_name, u.phone AS customer_phone
+            u.name AS customer_name, u.phone AS customer_phone,
+            (SELECT delivery_partner FROM shiprocket_settings LIMIT 1) AS delivery_partner
      FROM orders o
      LEFT JOIN users u ON u.id = o.customer_id
      WHERE o.id = $1
@@ -489,6 +490,11 @@ async function handleAutoAssign({ orderId, source = 'SYSTEM' }) {
   if (!order) {
     logger.warn({ orderId, source }, 'Auto-assign skipped: order not found')
     return { assigned: false, reason: 'ORDER_NOT_FOUND' }
+  }
+
+  // Own riders are paused while Shiprocket Quick is the delivery partner.
+  if (order.delivery_partner === 'SHIPROCKET') {
+    return { assigned: false, reason: 'SHIPROCKET_MODE' }
   }
 
   if (!ASSIGNABLE_ORDER_STATUSES.includes(order.status)) {
