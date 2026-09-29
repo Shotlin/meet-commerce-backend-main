@@ -39,9 +39,17 @@ export async function resolveCustomerContext(request) {
       return { shopIds: [] };
     }
   }
-  // Only customers are scoped. ADMIN/RIDER/shop-staff sessions retain
-  // legacy unscoped behaviour to preserve existing internal contracts.
-  if (user.role && user.role !== "CUSTOMER") return null;
+  // Customers are scoped to their allocated storefront shop. A RIDER-role
+  // account is scoped the same way: rider login converts a CUSTOMER account's
+  // role to RIDER (auth.service.js#verifyOtp), so the same person opening the
+  // customer app would otherwise be treated as "unscoped" — the theme/tabs/
+  // sections came back with shop_id null, the app (correctly) refused that as
+  // a scope mismatch, and the home/category screens never loaded for them.
+  // ADMIN/shop-staff sessions retain legacy unscoped behaviour to preserve
+  // existing internal contracts.
+  if (user.role && user.role !== "CUSTOMER" && user.role !== "RIDER") {
+    return null;
+  }
   return { userId: user.id };
 }
 
