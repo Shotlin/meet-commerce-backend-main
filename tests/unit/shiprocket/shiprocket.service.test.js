@@ -35,6 +35,13 @@ describe('ShiprocketService', () => {
     expect(r.recordTest).toHaveBeenCalledWith({ status: 'SUCCESS', message: 'Connected to Shiprocket' }, 'admin')
   })
 
+  it('warns clearly when the Shiprocket account has no pickup locations', async () => {
+    const client = { login: vi.fn().mockResolvedValue('t'), listPickupLocations: vi.fn().mockResolvedValue([]) }
+    const res = await new ShiprocketService(repo(), () => client).test({}, 'admin')
+    expect(res.success).toBe(true)
+    expect(res.message).toMatch(/NO pickup locations/)
+  })
+
   it('a failed login is reported, not thrown', async () => {
     const r = repo()
     const client = { login: vi.fn().mockRejectedValue(new Error('Invalid credentials')), listPickupLocations: vi.fn() }

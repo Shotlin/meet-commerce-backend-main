@@ -65,9 +65,12 @@ export class ShiprocketService {
       const client = this.clientFactory(credentials)
       await client.login()
       const pickups = await client.listPickupLocations().catch(() => null)
+      const noPickups = Array.isArray(pickups) && pickups.length === 0
       result = {
         success: true,
-        message: 'Connected to Shiprocket',
+        message: noPickups
+          ? 'Connected to Shiprocket, but your account has NO pickup locations. Add your store in Shiprocket → Settings → Pickup Addresses (and verify its phone), then test again.'
+          : 'Connected to Shiprocket',
         pickupLocations: pickups
           ? pickups.map((p) => ({ name: p.pickup_location, city: p.city, pin: p.pin_code }))
           : null,

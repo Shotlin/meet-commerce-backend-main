@@ -103,13 +103,13 @@ export class ShiprocketOrdersService {
       created = await client.createQuickOrder(payload)
     } catch (err) {
       await this.#saveFailure(orderId, srOrderRef, err.message, adminId)
-      throw fail(`Shiprocket rejected the order: ${err.message}`, 502)
+      throw fail(`Shiprocket rejected the order: ${err.message}`, 422)
     }
     if (!created?.order_id || !created?.shipment_id) {
       const detail = String(created?.message || JSON.stringify(created) || 'empty response').slice(0, 300)
       await this.#saveFailure(orderId, srOrderRef, `Shiprocket did not return an order id: ${detail}`, adminId)
       logger.warn({ orderId, response: created }, 'Shiprocket create returned no order/shipment id')
-      throw fail(`Shiprocket did not create the order: ${detail}`, 502)
+      throw fail(`Shiprocket did not create the order: ${detail}`, 422)
     }
     const row = await this.#upsert(orderId, {
       sr_order_ref: srOrderRef, sr_order_id: created.order_id, sr_shipment_id: created.shipment_id,
@@ -120,7 +120,7 @@ export class ShiprocketOrdersService {
       await this.#update(orderId, { status: 'ASSIGNING' })
     } catch (err) {
       await this.#update(orderId, { last_error: `Rider assignment failed: ${err.message}` })
-      throw fail(`Order created in Shiprocket but rider assignment failed: ${err.message}. Press Assign again to retry.`, 502)
+      throw fail(`Order created in Shiprocket but rider assignment failed: ${err.message}. Press Assign again to retry.`, 422)
     }
     emit('shiprocket_order_assigned', {
       actor_user_id: adminId, target_type: 'orders', target_id: orderId,
@@ -174,7 +174,7 @@ export class ShiprocketOrdersService {
     try {
       await client.cancelOrders([Number(shipment.sr_order_id)])
     } catch (err) {
-      throw fail(`Shiprocket could not cancel: ${err.message}`, 502)
+      throw fail(`Shiprocket could not cancel: ${err.message}`, 422)
     }
     const row = await this.#update(orderId, { status: 'CANCELLED' })
     emit('shiprocket_order_cancelled', { actor_user_id: adminId, target_type: 'orders', target_id: orderId })
