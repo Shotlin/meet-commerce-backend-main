@@ -15,6 +15,7 @@ function toView(row) {
     hasPassword: Boolean(row?.api_password_encrypted),
     pickupLocation: row?.pickup_location || null,
     deliveryPartner: row?.delivery_partner || 'OWN_RIDERS',
+    simulationMode: Boolean(row?.simulation_mode),
     lastTestedAt: row?.last_tested_at || null,
     lastTestStatus: row?.last_test_status || null,
     lastTestMessage: row?.last_test_message || null,
@@ -42,6 +43,7 @@ export class ShiprocketService {
         passwordChanged: input?.password !== undefined,
         pickupLocation: input?.pickupLocation,
         deliveryPartner: input?.deliveryPartner,
+        simulationMode: input?.simulationMode,
       },
     })
     return toView(row)

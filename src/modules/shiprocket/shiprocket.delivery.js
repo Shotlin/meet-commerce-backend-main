@@ -113,3 +113,65 @@ export function pickQuickCourier(list) {
   const rate = Number(q.rates ?? q.rate ?? q.freight_charge)
   return { courierName: q.courier_name || 'Shiprocket Quick', courierId: q.courier_company_id ?? null, rate: Number.isFinite(rate) ? rate : null }
 }
+
+// ── Simulation (demo) mode helpers — never touch the network ─────────────────
+
+export function haversineKm(lat1, lng1, lat2, lng2) {
+  const rad = (d) => (Number(d) * Math.PI) / 180
+  const dLat = rad(lat2 - lat1)
+  const dLng = rad(lng2 - lng1)
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLng / 2) ** 2
+  return 6371 * 2 * Math.asin(Math.sqrt(h))
+}
+
+/** A believable demo price: ₹40 base + ₹6/km, rounded. */
+export function simulatedRate(km) {
+  const d = Number.isFinite(km) ? km : 0
+  return Math.round(40 + 6 * d)
+}
+
+const SIM_NEXT = {
+  CREATED: 'ASSIGNED',
+  ASSIGNING: 'ASSIGNED',
+  ASSIGNED: 'PICKED_UP',
+  PICKED_UP: 'OUT_FOR_DELIVERY',
+  OUT_FOR_DELIVERY: 'DELIVERED',
+}
+const SIM_LABEL = {
+  ASSIGNED: 'Rider assigned (demo)',
+  PICKED_UP: 'Picked up (demo)',
+  OUT_FOR_DELIVERY: 'Out for delivery (demo)',
+  DELIVERED: 'Delivered (demo)',
+}
+
+/** The next demo status + the fields to store, or null when the shipment is already finished. */
+export function nextSimulationStep(current, orderNumber = 'ORDER') {
+  const status = SIM_NEXT[current]
+  if (!status) return null
+  const fields = { status, sr_status: SIM_LABEL[status] }
+  if (status === 'ASSIGNED') {
+    fields.awb_code = `SIM${String(orderNumber).replace(/\D/g, '').slice(-8) || '0001'}`
+    fields.courier_name = 'Shiprocket Quick (demo)'
+    fields.agent_name = 'Demo Rider'
+    fields.agent_phone = '9000000000'
+  }
+  return fields
+}
+
+/**
+ * Picks the Shiprocket pickup-location NAME to send. Shiprocket only accepts a name that
+ * exists in the account, so: the configured name (case-insensitive) → else the address whose
+ * pincode equals the store's → else the only address there is → else null.
+ */
+export function resolvePickupLocation(list, configured, shopPincode) {
+  const items = (list || []).filter((p) => p?.pickup_location)
+  const want = String(configured || '').trim().toLowerCase()
+  if (want) {
+    const hit = items.find((p) => String(p.pickup_location).trim().toLowerCase() === want)
+    if (hit) return hit.pickup_location
+  }
+  const byPin = items.filter((p) => shopPincode && String(p.pin_code) === String(shopPincode))
+  if (byPin.length === 1) return byPin[0].pickup_location
+  if (items.length === 1) return items[0].pickup_location
+  return null
+}

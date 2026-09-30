@@ -1,7 +1,7 @@
 import { query } from '../../config/database.js'
 import { encryptSecret, decryptSecret } from '../../utils/encryption.js'
 
-const COLUMNS = `id, api_email, api_password_encrypted, pickup_location, delivery_partner,
+const COLUMNS = `id, api_email, api_password_encrypted, pickup_location, delivery_partner, simulation_mode,
   last_tested_at, last_test_status, last_test_message, updated_at, updated_by`
 
 let partnerCache = { value: undefined, expiresAt: 0 }
@@ -38,7 +38,7 @@ export class ShiprocketRepository {
   }
 
   /** Omitted -> untouched; empty string -> cleared. Any edit clears the last test. */
-  async save({ email, password, pickupLocation, deliveryPartner } = {}, updatedBy = null) {
+  async save({ email, password, pickupLocation, deliveryPartner, simulationMode } = {}, updatedBy = null) {
     const fields = []
     const params = []
     let i = 1
@@ -55,6 +55,10 @@ export class ShiprocketRepository {
       fields.push(`delivery_partner = $${i++}`)
       params.push(deliveryPartner)
       partnerCache = { value: undefined, expiresAt: 0 }
+    }
+    if (simulationMode !== undefined) {
+      fields.push(`simulation_mode = $${i++}`)
+      params.push(Boolean(simulationMode))
     }
     if (email !== undefined || password !== undefined) {
       fields.push('last_tested_at = NULL', 'last_test_status = NULL', 'last_test_message = NULL')

@@ -5,6 +5,7 @@ import { ShiprocketClient } from './shiprocket.client.js'
 import {
   assessEligibility, buildQuickOrderPayload, buildSrOrderRef, isLiveShipment,
   mapTrackingStatus, parseTracking, pickQuickCourier,
+  haversineKm, simulatedRate, nextSimulationStep, resolvePickupLocation,
 } from './shiprocket.delivery.js'
 import { emit } from '../../utils/audit-log.js'
 
@@ -28,6 +29,14 @@ export class ShiprocketOrdersService {
     const key = `${creds.email}:${creds.password.length}`
     if (!this.clients.has(key)) this.clients = new Map([[key, this.clientFactory(creds)]])
     return { client: this.clients.get(key), creds }
+  }
+
+  async #simulated() {
+    try {
+      return Boolean((await this.repository.get())?.simulation_mode)
+    } catch {
+      return false
+    }
   }
 
   async #load(orderId) {
@@ -65,6 +74,11 @@ export class ShiprocketOrdersService {
     this.assertShop(order, requestShopId)
     const reason = assessEligibility({ order, shop, shipment })
     if (reason) return { eligible: false, reason, available: false, rate: null, shipment }
+    if (await this.#simulated()) {
+      const a = order.delivery_address
+      const km = haversineKm(shop.lat, shop.lng, a.lat, a.lng)
+      return { eligible: true, reason: null, available: true, rate: simulatedRate(km), courierName: 'Shiprocket Quick (demo)', simulated: true, shipment }
+    }
     const { client } = await this.#client()
     const a = order.delivery_address
     try {
@@ -87,14 +101,35 @@ export class ShiprocketOrdersService {
     this.assertShop(order, requestShopId)
     const reason = assessEligibility({ order, shop, shipment })
     if (reason) throw fail(reason, 409)
+    if (await this.#simulated()) {
+      const stamp = Date.now()
+      const row = await this.#upsert(orderId, {
+        sr_order_ref: `SIM-${order.order_number}`, sr_order_id: stamp, sr_shipment_id: stamp + 1,
+        status: 'ASSIGNING', last_error: null, created_by: adminId, is_simulated: true,
+      })
+      const withLabel = await this.#update(orderId, { sr_status: 'Finding a rider (demo)' })
+      emit('shiprocket_order_assigned_simulated', { actor_user_id: adminId, target_type: 'orders', target_id: orderId })
+      return withLabel || row
+    }
     const { client, creds } = await this.#client()
-    if (!creds.pickupLocation) throw fail('Set the default pickup location in Shiprocket settings first')
+    // Shiprocket only accepts a pickup NAME that exists in the account — resolve it from the real list.
+    const pickups = await client.listPickupLocations().catch(() => null)
+    const pickupLocation = pickups ? resolvePickupLocation(pickups, creds.pickupLocation, shop.pincode) : creds.pickupLocation
+    if (!pickupLocation) {
+      const names = (pickups || []).map((p) => `"${p.pickup_location}"`).join(', ')
+      throw fail(
+        pickups?.length
+          ? `No Shiprocket pickup address matches "${creds.pickupLocation || ''}" or pincode ${shop.pincode}. Your Shiprocket pickup addresses: ${names}. Save the exact name on the Shiprocket settings page.`
+          : 'Your Shiprocket account has no pickup address. Add one in Shiprocket → Settings → Pickup Addresses.',
+        422
+      )
+    }
 
     // Only bump the id suffix if the previous attempt really created an order at Shiprocket.
     const attempt = shipment?.sr_order_id ? Number(String(shipment.sr_order_ref).split('-R')[1] || 0) + 1 : Number(String(shipment?.sr_order_ref || '').split('-R')[1] || 0)
     const srOrderRef = buildSrOrderRef(order.order_number, attempt)
     const payload = buildQuickOrderPayload({
-      order, shop, items, pickupLocation: creds.pickupLocation, srOrderRef,
+      order, shop, items, pickupLocation, srOrderRef,
       customer: { name: order.customer_name, phone: order.customer_phone, email: order.customer_email },
     })
 
@@ -133,7 +168,7 @@ export class ShiprocketOrdersService {
   async refresh(orderId) {
     const { rows } = await query('SELECT * FROM shiprocket_shipments WHERE order_id = $1', [orderId])
     const sh = rows[0]
-    if (!sh || !isLiveShipment(sh) || !sh.sr_shipment_id) return sh || null
+    if (!sh || !isLiveShipment(sh) || !sh.sr_shipment_id || sh.is_simulated) return sh || null
     const { client } = await this.#client()
     let info
     try {
@@ -157,7 +192,7 @@ export class ShiprocketOrdersService {
   async syncActive() {
     const { rows } = await query(
       `SELECT order_id FROM shiprocket_shipments
-       WHERE status IN ('ASSIGNING','ASSIGNED','PICKED_UP','OUT_FOR_DELIVERY') LIMIT 100`
+       WHERE status IN ('ASSIGNING','ASSIGNED','PICKED_UP','OUT_FOR_DELIVERY') AND is_simulated = FALSE LIMIT 100`
     )
     for (const r of rows) {
       try { await this.refresh(r.order_id) } catch (err) { logger.warn({ err: err.message }, 'Shiprocket sync failed') }
@@ -170,15 +205,31 @@ export class ShiprocketOrdersService {
     this.assertShop(order, requestShopId)
     if (!isLiveShipment(shipment)) throw fail('No active Shiprocket delivery for this order', 409)
     if (['PICKED_UP', 'OUT_FOR_DELIVERY'].includes(shipment.status)) throw fail('The rider already picked this up — it cannot be cancelled', 409)
-    const { client } = await this.#client()
-    try {
-      await client.cancelOrders([Number(shipment.sr_order_id)])
-    } catch (err) {
-      throw fail(`Shiprocket could not cancel: ${err.message}`, 422)
+    if (!shipment.is_simulated) {
+      const { client } = await this.#client()
+      try {
+        await client.cancelOrders([Number(shipment.sr_order_id)])
+      } catch (err) {
+        throw fail(`Shiprocket could not cancel: ${err.message}`, 422)
+      }
     }
     const row = await this.#update(orderId, { status: 'CANCELLED' })
     emit('shiprocket_order_cancelled', { actor_user_id: adminId, target_type: 'orders', target_id: orderId })
     return row
+  }
+
+  /** Demo only: move a simulated shipment one step forward (rider assigned → picked up → out → delivered). */
+  async advanceSimulation(orderId, adminId, requestShopId) {
+    const { order, shipment } = await this.#load(orderId)
+    this.assertShop(order, requestShopId)
+    if (!shipment?.is_simulated) throw fail('This order is not a demo (simulated) shipment', 409)
+    if (!isLiveShipment(shipment)) throw fail('The demo delivery is already finished', 409)
+    const step = nextSimulationStep(shipment.status, order.order_number)
+    if (!step) throw fail('The demo delivery is already finished', 409)
+    const updated = await this.#update(orderId, step)
+    await this.#syncOrderStatus(orderId, step.status)
+    emit('shiprocket_simulation_advanced', { actor_user_id: adminId, target_type: 'orders', target_id: orderId, after: { status: step.status } })
+    return updated
   }
 
   async get(orderId) {
@@ -205,14 +256,15 @@ export class ShiprocketOrdersService {
 
   async #upsert(orderId, f) {
     const { rows } = await query(
-      `INSERT INTO shiprocket_shipments (order_id, sr_order_ref, sr_order_id, sr_shipment_id, status, last_error, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
+      `INSERT INTO shiprocket_shipments (order_id, sr_order_ref, sr_order_id, sr_shipment_id, status, last_error, created_by, is_simulated)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        ON CONFLICT (order_id) DO UPDATE SET sr_order_ref = EXCLUDED.sr_order_ref, sr_order_id = EXCLUDED.sr_order_id,
          sr_shipment_id = EXCLUDED.sr_shipment_id, status = EXCLUDED.status, last_error = EXCLUDED.last_error,
+         is_simulated = EXCLUDED.is_simulated,
          awb_code = NULL, agent_name = NULL, agent_phone = NULL, tracking_url = NULL, sr_status = NULL,
          updated_at = NOW()
        RETURNING *`,
-      [orderId, f.sr_order_ref, f.sr_order_id, f.sr_shipment_id, f.status, f.last_error, f.created_by]
+      [orderId, f.sr_order_ref, f.sr_order_id, f.sr_shipment_id, f.status, f.last_error, f.created_by, Boolean(f.is_simulated)]
     )
     return rows[0]
   }

@@ -73,3 +73,53 @@ describe('tracking', () => {
     expect(pickQuickCourier([])).toBeNull()
   })
 })
+
+import { haversineKm, simulatedRate, nextSimulationStep } from '../../../src/modules/shiprocket/shiprocket.delivery.js'
+
+describe('simulation helpers', () => {
+  it('haversine + demo rate are sane', () => {
+    const km = haversineKm(26.8537, 81.0117, 26.85, 80.94)
+    expect(km).toBeGreaterThan(5)
+    expect(km).toBeLessThan(10)
+    expect(simulatedRate(km)).toBe(Math.round(40 + 6 * km))
+    expect(simulatedRate(NaN)).toBe(40)
+  })
+  it('walks the full demo lifecycle in order and then stops', () => {
+    const seen = []
+    let cur = 'ASSIGNING'
+    for (let i = 0; i < 6; i++) {
+      const step = nextSimulationStep(cur, 'FC-STR-20260930-0007')
+      if (!step) break
+      seen.push(step.status)
+      cur = step.status
+    }
+    expect(seen).toEqual(['ASSIGNED', 'PICKED_UP', 'OUT_FOR_DELIVERY', 'DELIVERED'])
+    expect(nextSimulationStep('DELIVERED')).toBeNull()
+    expect(nextSimulationStep('CANCELLED')).toBeNull()
+  })
+  it('the first step attaches a demo rider, awb and courier', () => {
+    expect(nextSimulationStep('ASSIGNING', 'FC-STR-20260930-0007')).toMatchObject({
+      status: 'ASSIGNED', agent_name: 'Demo Rider', agent_phone: '9000000000', awb_code: 'SIM09300007',
+    })
+  })
+})
+
+import { resolvePickupLocation } from '../../../src/modules/shiprocket/shiprocket.delivery.js'
+
+describe('resolvePickupLocation', () => {
+  const work = { pickup_location: 'work', pin_code: '226010' }
+  const other = { pickup_location: 'Kolkata Hub', pin_code: '700001' }
+  it('the exact real-world case: setting "Lucknow" but the account only has "work" at 226010', () => {
+    expect(resolvePickupLocation([work], 'Lucknow', '226010')).toBe('work')
+  })
+  it('prefers the configured name (case-insensitive)', () => {
+    expect(resolvePickupLocation([work, other], ' KOLKATA hub ', '226010')).toBe('Kolkata Hub')
+  })
+  it('falls back to the store pincode when several exist and the name does not match', () => {
+    expect(resolvePickupLocation([work, other], 'nope', '226010')).toBe('work')
+  })
+  it('returns null when it cannot decide safely', () => {
+    expect(resolvePickupLocation([work, other], 'nope', '999999')).toBeNull()
+    expect(resolvePickupLocation([], 'x', '226010')).toBeNull()
+  })
+})

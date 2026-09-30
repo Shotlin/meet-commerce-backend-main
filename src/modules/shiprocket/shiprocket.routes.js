@@ -28,6 +28,7 @@ export default async function shiprocketRoutes(fastify) {
           password: { type: 'string', maxLength: 200 },
           pickupLocation: { type: 'string', maxLength: 200 },
           deliveryPartner: { type: 'string', enum: ['OWN_RIDERS', 'SHIPROCKET'] },
+          simulationMode: { type: 'boolean' },
         },
       },
     },
@@ -61,6 +62,8 @@ export default async function shiprocketRoutes(fastify) {
     handle((req) => orders.assign(req.params.orderId, req.user?.id, req.shopId), 'Assigned to Shiprocket'))
   fastify.post('/orders/:orderId/refresh', { schema: { tags, params: orderParams }, preHandler: scoped },
     handle((req) => orders.refresh(req.params.orderId), 'Refreshed'))
+  fastify.post('/orders/:orderId/simulate-advance', { schema: { tags, params: orderParams }, preHandler: scoped },
+    handle((req) => orders.advanceSimulation(req.params.orderId, req.user?.id, req.shopId), 'Demo delivery advanced'))
   fastify.post('/orders/:orderId/cancel', { schema: { tags, params: orderParams }, preHandler: scoped },
     handle((req) => orders.cancel(req.params.orderId, req.user?.id, req.shopId), 'Cancelled'))
 }
