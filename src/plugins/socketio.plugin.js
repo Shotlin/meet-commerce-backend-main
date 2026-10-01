@@ -7,6 +7,7 @@ import jwt from 'jsonwebtoken'
 import { redis } from '../config/redis.js'
 import { query } from '../config/database.js'
 import { socketAuthMiddleware } from '../socket/auth.js'
+import { nextEventSeq } from '../modules/orders/order-events.js'
 
 const RIDER_LOCATION_PREFIX = 'rider:location:'
 const RIDER_LOCATION_TTL = 300 // 5 minutes
@@ -263,7 +264,15 @@ async function socketioPlugin(fastify) {
   fastify.decorate('io', io)
   activeIo = io
 
-  // Helper: emit order status update to customer + rider + admin
+  // Helper: emit order status update to customer + rider + admin (+ the
+  // order's shop dashboard room when the payload carries `shopId`).
+  //
+  // Every event carries `eventId` + a strictly-increasing `seq` so clients
+  // can drop duplicates and out-of-order deliveries, and is published with a
+  // SINGLE multi-room emit — socket.io delivers once per socket even when a
+  // socket (the customer: `user:{id}` + `order:{id}`) is in several of the
+  // target rooms. Previously this was 3+ separate emits, so a customer
+  // received every status update twice.
   fastify.decorate('emitOrderUpdate', (orderId, userIdsOrData, maybeData) => {
     const payload = maybeData === undefined ? userIdsOrData : maybeData
     const userIds = maybeData === undefined
@@ -273,17 +282,19 @@ async function socketioPlugin(fastify) {
         : userIdsOrData
           ? [userIdsOrData]
           : []
+    const seq = payload?.seq ?? nextEventSeq()
     const data = {
       orderId,
-      timestamp: new Date().toISOString(),
+      timestamp: new Date(seq).toISOString(),
       ...(payload || {}),
+      eventId: payload?.eventId ?? `order:${orderId}:${seq}`,
+      seq,
     }
 
-    io.to(`order:${orderId}`).emit('order:status', data)
-    for (const userId of userIds) {
-      io.to(`user:${userId}`).emit('order:status', data)
-    }
-    io.to('admin:dashboard').emit('order:status', data)
+    const rooms = new Set(['admin:dashboard', `order:${orderId}`])
+    for (const userId of userIds) rooms.add(`user:${userId}`)
+    if (data.shopId) rooms.add(`shop:${data.shopId}`)
+    io.to([...rooms]).emit('order:status', data)
   })
 
   fastify.decorate('emitOrderAssignedToRider', (riderId, data) => {

@@ -146,6 +146,12 @@ export const buildApp = async () => {
     prefix: "/api/v1/orders",
   });
 
+  // Customer refund requests (mobile app) — item-level / full-order, synced
+  // to the order's own shop dashboard. Admin side: /api/v1/admin/returns.
+  await app.register(import("./modules/refund-requests/refund-requests.routes.js"), {
+    prefix: "/api/v1/refund-requests",
+  });
+
   // Vendors — Phase 2 Subsystem
   await app.register(import("./modules/vendors/vendors.routes.js"), {
     prefix: "/api/v1/vendors",

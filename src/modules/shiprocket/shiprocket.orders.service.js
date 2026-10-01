@@ -1,4 +1,5 @@
 import { query } from '../../config/database.js'
+import { announceOrderStatusById } from '../orders/order-events.js'
 import { logger } from '../../config/logger.js'
 import { ShiprocketRepository } from './shiprocket.repository.js'
 import { ShiprocketClient } from './shiprocket.client.js'
@@ -251,6 +252,10 @@ export class ShiprocketOrdersService {
         `INSERT INTO order_status_history (order_id, to_status, note) VALUES ($1, $2, 'Updated by Shiprocket Quick')`,
         [orderId, target]
       )
+      // Same customer notification + realtime event every other status
+      // writer produces — previously a Shiprocket-driven DELIVERED reached
+      // neither the customer's app nor the dashboard until a manual refresh.
+      await announceOrderStatusById(orderId, target)
     }
   }
 

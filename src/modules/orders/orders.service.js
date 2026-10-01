@@ -7,6 +7,7 @@
 
 import crypto from 'node:crypto'
 import { logger } from '../../config/logger.js'
+import { publishOrderStatus } from './order-events.js'
 import { getClient } from '../../config/database.js'
 import { CartRepository } from '../cart/cart.repository.js'
 import { CartService } from '../cart/cart.service.js'
@@ -451,6 +452,14 @@ export class OrdersService {
     logger.info({ customerId, orderId, reason }, 'Order cancelled by customer')
 
     const updated = await this.repository.findByIdAndUser(orderId, customerId)
+    // Dashboards (HQ + the order's shop) learn about a customer-side cancel
+    // instantly instead of on their next refresh.
+    publishOrderStatus({
+      id: orderId,
+      order_number: order.order_number ?? order.orderNumber,
+      customer_id: customerId,
+      shop_id: order.shop_id ?? order.shopId,
+    }, 'CANCELLED', { message: 'Order cancelled by customer', io: this.fastify?.io })
     return { alreadyCancelled: false, paymentConfirmed: false, order: updated }
   }
 

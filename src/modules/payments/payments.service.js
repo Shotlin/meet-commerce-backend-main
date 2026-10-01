@@ -716,7 +716,7 @@ export class PaymentsService {
   /**
    * Admin: initiate refund
    */
-  async refund(paymentId, { amount, reason }) {
+  async refund(paymentId, { amount, reason, markOrderRefunded = true }) {
     if (!razorpay) {
       return { success: false, message: 'Online payments are not configured' }
     }
@@ -751,13 +751,16 @@ export class PaymentsService {
         refundStatus: 'PROCESSED',
       })
 
-      // Update order status to refunded
-      await this.ordersRepo.updateStatus(payment.orderId, 'REFUNDED', {
-        paymentStatus: 'REFUNDED',
-      })
+      // Update order status to refunded — skipped for a PARTIAL (item-level)
+      // refund, where the order itself stays DELIVERED.
+      if (markOrderRefunded) {
+        await this.ordersRepo.updateStatus(payment.orderId, 'REFUNDED', {
+          paymentStatus: 'REFUNDED',
+        })
+      }
 
       logger.info({ paymentId, refundId: rzpRefund.id, refundAmount }, 'Refund initiated')
-      return { success: true, payment: updated }
+      return { success: true, payment: updated, refundId: rzpRefund.id }
     } catch (err) {
       logger.error({ err, paymentId }, 'Refund failed')
       return { success: false, message: 'Refund failed: ' + err.message }

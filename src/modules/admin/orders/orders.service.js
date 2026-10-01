@@ -159,13 +159,16 @@ export class AdminOrdersService {
   }
 
   async findById(orderId, requestShopId = null) {
-    const [order, items, timeline, payment, delivery, settlementHistory] = await Promise.all([
+    const [order, items, timeline, payment, delivery, settlementHistory, refundRequest] = await Promise.all([
       this.repository.findById(orderId),
       this.repository.getOrderItems(orderId),
       this.repository.getOrderTimeline(orderId),
       this.repository.getOrderPayment(orderId),
       this.repository.getOrderDelivery(orderId),
       this.repository.getSettlementHistory(orderId),
+      // Customer-raised refund request (latest) — null when none. Failure here
+      // must never take the whole order detail down.
+      this._latestRefundRequest(orderId),
     ])
     if (!order) throw { statusCode: 404, message: 'Order not found' }
     this._assertShopAccess(order, requestShopId)
@@ -178,6 +181,16 @@ export class AdminOrdersService {
       delivery,
       settlement: this._buildSettlementSummary(order, settlementHistory),
       quality_evidence: qualityEvidence,
+      refund_request: refundRequest,
+    }
+  }
+
+  async _latestRefundRequest(orderId) {
+    try {
+      const { RefundRequestsRepository } = await import('../../refund-requests/refund-requests.repository.js')
+      return await new RefundRequestsRepository().findLatestByOrder(orderId)
+    } catch {
+      return null
     }
   }
 
@@ -761,6 +774,16 @@ export class AdminOrdersService {
     // status until the order list/detail was manually refreshed.
     this._emitOrderStatus(order, 'REFUNDED')
 
+    // A customer-raised request still open on this order is now moot.
+    try {
+      const { RefundRequestsService } = await import('../../refund-requests/refund-requests.service.js')
+      await new RefundRequestsService({ fastify: this.fastify }).closeOpenRequestsForDirectRefund(orderId, {
+        amount: refundAmount, resolvedBy: adminId, destination: refundTo,
+      })
+    } catch (err) {
+      console.error('Closing open refund requests failed (non-blocking):', err?.message || err)
+    }
+
     return { orderId, refundAmount, refundTo, status: 'REFUNDED' }
   }
 
@@ -1135,6 +1158,8 @@ export class AdminOrdersService {
         orderId: order.id,
         orderNumber: order.order_number,
         status,
+        timelineType: status,
+        shopId: order.shop_id || undefined,
         message: this._statusMessage(status),
       })
     } catch (_) {

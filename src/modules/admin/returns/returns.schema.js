@@ -1,4 +1,4 @@
-const STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED']
+const STATUSES = ['PENDING', 'PROCESSING', 'APPROVED', 'REJECTED', 'CANCELLED']
 const SCOPES = ['FULL_ORDER', 'ITEMS']
 const DESTINATIONS = ['RAZORPAY', 'WALLET']
 
@@ -35,6 +35,11 @@ export const createReturnSchema = {
     properties: {
       orderId: { type: 'string', format: 'uuid' },
       scope: { type: 'string', enum: SCOPES },
+      productIds: {
+        type: 'array',
+        items: { type: 'string', format: 'uuid' },
+        description: 'Alternative to itemIndexes — the products being returned',
+      },
       itemIndexes: {
         type: 'array',
         items: { type: 'integer', minimum: 0 },
@@ -54,6 +59,7 @@ export const resolveReturnSchema = {
     type: 'object',
     properties: {
       adminNotes: { type: 'string', maxLength: 1000 },
+      refundTo: { type: 'string', enum: DESTINATIONS, description: 'Approve only — override the refund destination' },
     },
   },
 }
