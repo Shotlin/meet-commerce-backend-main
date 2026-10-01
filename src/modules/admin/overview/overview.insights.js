@@ -81,7 +81,7 @@ export function buildInsights(ctx) {
       severity: severityFor(impact, netRevenue),
       title: `${p.name} sells well but earns only ${pct(p.margin, 1)} margin`,
       detail: `${inr(p.revenue)} revenue at ${pct(p.margin, 1)} margin. Reaching a ${pct(T.TARGET_MARGIN)} margin would add about ${inr(impact)}. Review its selling price or vendor cost.`,
-      impact_inr: impact, entity: { type: 'product', id: p.product_id, name: p.name }, link: '/catalogue',
+      impact_inr: impact, entity: { type: 'product', id: p.product_id, name: p.name, image: p.image ?? null }, link: '/catalogue',
     })
   })
 
@@ -95,7 +95,7 @@ export function buildInsights(ctx) {
       severity: severityFor(p.refunded_value, netRevenue),
       title: `${p.name} has a ${pct(rate, 1)} refund rate`,
       detail: `${p.refunded_units} of ${p.units} units refunded (${inr(p.refunded_value)} refunded). Check quality, packing and the vendor batch.`,
-      impact_inr: p.refunded_value, entity: { type: 'product', id: p.product_id, name: p.name }, link: '/returns',
+      impact_inr: p.refunded_value, entity: { type: 'product', id: p.product_id, name: p.name, image: p.image ?? null }, link: '/returns',
     })
   })
 
@@ -171,7 +171,7 @@ export function buildInsights(ctx) {
       severity: severityFor(s.stock_value * 0.5, netRevenue),
       title: `${s.name}: ${s.stock} in stock, only ${Math.round(s.units_sold)} sold`,
       detail: `About ${inr(s.stock_value)} of stock is tied up and barely selling. Fresh meat expires — consider a promotion or smaller purchases.`,
-      impact_inr: s.stock_value, entity: { type: 'product', id: s.product_id, name: s.name }, link: '/inventory',
+      impact_inr: s.stock_value, entity: { type: 'product', id: s.product_id, name: s.name, image: s.image ?? null }, link: '/inventory',
     })
   })
 
@@ -198,7 +198,7 @@ export function buildInsights(ctx) {
         severity: severityFor(gain, netRevenue),
         title: `${p.name} demand is up ${pct(p.growth)}`,
         detail: `Revenue grew from ${inr(p.prev_revenue)} to ${inr(p.revenue)}. Make sure it stays in stock${p.margin != null ? ` (margin ${pct(p.margin, 1)})` : ''}.`,
-        impact_inr: gain, entity: { type: 'product', id: p.product_id, name: p.name }, link: '/catalogue',
+        impact_inr: gain, entity: { type: 'product', id: p.product_id, name: p.name, image: p.image ?? null }, link: '/catalogue',
       })
     })
 
@@ -232,7 +232,7 @@ export function buildInsights(ctx) {
         severity: severityFor(p.repeat_revenue, netRevenue),
         title: `${p.repeat_buyers} customers keep re-buying ${p.name}`,
         detail: `${inr(p.repeat_revenue)} came from customers who bought it more than once. Candidates for a subscription or bundle.`,
-        impact_inr: p.repeat_revenue, entity: { type: 'product', id: p.product_id, name: p.name }, link: '/catalogue',
+        impact_inr: p.repeat_revenue, entity: { type: 'product', id: p.product_id, name: p.name, image: p.image ?? null }, link: '/catalogue',
       })
     })
 

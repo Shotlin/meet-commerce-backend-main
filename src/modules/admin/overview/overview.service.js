@@ -158,7 +158,7 @@ export class OverviewService {
     // ── products ──
     const enriched = withGrowth(prodCur, prodPrev)
     const view = (p) => ({
-      product_id: p.product_id, name: p.name, units: p.units, revenue: round2(p.revenue),
+      product_id: p.product_id, name: p.name, image: p.image ?? null, units: p.units, revenue: round2(p.revenue),
       margin: p.margin, profit: p.costed_revenue > 0 && p.cogs != null ? round2(p.costed_revenue - p.cogs) : null,
       growth: p.growth, refunded_units: p.refunded_units, refund_rate: safeDiv(p.refunded_units, p.units),
       refunded_value: round2(p.refunded_value), repeat_buyers: p.repeat_buyers,
@@ -192,7 +192,7 @@ export class OverviewService {
     const productsByArea = new Map()
     topAreaProducts.forEach((p) => {
       if (!productsByArea.has(p.pincode)) productsByArea.set(p.pincode, [])
-      productsByArea.get(p.pincode).push({ product_id: p.product_id, name: p.name, units: p.units })
+      productsByArea.get(p.pincode).push({ product_id: p.product_id, name: p.name, image: p.image, units: p.units })
     })
     const areas = areaRows.slice(0, 15).map((a) => ({ ...a, top_products: productsByArea.get(a.pincode) || [] }))
 
@@ -226,7 +226,7 @@ export class OverviewService {
     const vendors = vendorBuys.map((v) => {
       const skus = marginsByVendor.get(v.vendor_id) || []
       const costed = skus.filter((k) => k.costed_revenue > 0 && k.cogs != null)
-        .map((k) => ({ name: k.name, product_id: k.product_id, profit: round2(k.costed_revenue - k.cogs),
+        .map((k) => ({ name: k.name, image: k.image ?? null, product_id: k.product_id, profit: round2(k.costed_revenue - k.cogs),
           margin: (k.costed_revenue - k.cogs) / k.costed_revenue }))
         .sort((a, b) => b.profit - a.profit)
       const cr = skus.reduce((sum, k) => sum + (k.costed_revenue || 0), 0)

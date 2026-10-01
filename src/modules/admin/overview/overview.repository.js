@@ -170,6 +170,7 @@ export class OverviewRepository {
        lines AS (
          SELECT oi.product_id, oi.product_name, oi.quantity, oi.subtotal,
                 f.id AS order_id, f.customer_id,
+                COALESCE(NULLIF(p.thumbnail_url, ''), NULLIF(p.images->>0, '')) AS image,
                 COALESCE(sp.cost_price, p.cost_price) AS unit_cost
            FROM facts f
            JOIN order_items oi        ON oi.order_id = f.id
@@ -178,7 +179,7 @@ export class OverviewRepository {
           WHERE oi.product_id IS NOT NULL
        ),
        sales AS (
-         SELECT product_id, MAX(product_name) AS name,
+         SELECT product_id, MAX(product_name) AS name, MAX(image) AS image,
                 SUM(quantity) AS units, SUM(subtotal) AS revenue,
                 SUM(quantity * unit_cost) FILTER (WHERE unit_cost IS NOT NULL) AS cogs,
                 SUM(subtotal) FILTER (WHERE unit_cost IS NOT NULL)             AS costed_revenue,
@@ -219,7 +220,7 @@ export class OverviewRepository {
            FROM (SELECT * FROM refund_full UNION ALL SELECT * FROM refund_items) u
           GROUP BY product_id
        )
-       SELECT s.product_id, s.name, s.units, s.revenue, s.cogs, s.costed_revenue,
+       SELECT s.product_id, s.name, s.image, s.units, s.revenue, s.cogs, s.costed_revenue,
               s.orders, s.buyers,
               COALESCE(rb.repeat_buyers, 0) AS repeat_buyers,
               COALESCE(rb.repeat_revenue, 0) AS repeat_revenue,
@@ -235,6 +236,7 @@ export class OverviewRepository {
     return rows.map((r) => ({
       product_id: r.product_id,
       name: r.name,
+      image: r.image || null,
       units: num(r.units),
       revenue: num(r.revenue),
       cogs: num(r.cogs),
@@ -259,7 +261,7 @@ export class OverviewRepository {
             AND ($3::uuid IS NULL OR o.shop_id = $3)
           GROUP BY oi.product_id
        )
-       SELECT p.id AS product_id, p.name,
+       SELECT p.id AS product_id, p.name, MAX(COALESCE(NULLIF(p.thumbnail_url, ''), NULLIF(p.images->>0, ''))) AS image,
               SUM(sp.stock_quantity)::int AS stock,
               COALESCE(MAX(sold.units), 0) AS units_sold,
               SUM(sp.stock_quantity * COALESCE(sp.cost_price, p.cost_price, sp.price)) AS stock_value
@@ -275,7 +277,7 @@ export class OverviewRepository {
       [params[0], params[1], params[2]]
     )
     return rows.map((r) => ({
-      product_id: r.product_id, name: r.name, stock: r.stock,
+      product_id: r.product_id, name: r.name, image: r.image || null, stock: r.stock,
       units_sold: num(r.units_sold), stock_value: num(r.stock_value),
     }))
   }
@@ -310,20 +312,22 @@ export class OverviewRepository {
       `WITH ${FACTS_CTE},
        ranked AS (
          SELECT COALESCE(f.pincode, 'Unknown') AS pincode, oi.product_id,
-                MAX(oi.product_name) AS name, SUM(oi.quantity) AS units, SUM(oi.subtotal) AS revenue,
+                MAX(oi.product_name) AS name, MAX(COALESCE(NULLIF(p.thumbnail_url, ''), NULLIF(p.images->>0, ''))) AS image,
+                SUM(oi.quantity) AS units, SUM(oi.subtotal) AS revenue,
                 ROW_NUMBER() OVER (PARTITION BY COALESCE(f.pincode, 'Unknown')
                                    ORDER BY SUM(oi.subtotal) DESC) AS rn
            FROM facts f JOIN order_items oi ON oi.order_id = f.id
+           LEFT JOIN products p ON p.id = oi.product_id
           WHERE oi.product_id IS NOT NULL
           GROUP BY 1, oi.product_id
        )
-       SELECT pincode, product_id, name, units, revenue
+       SELECT pincode, product_id, name, image, units, revenue
          FROM ranked WHERE rn <= 3 AND pincode = ANY($5::text[])
         ORDER BY pincode, rn`,
       [...params, pincodes]
     )
     return rows.map((r) => ({
-      pincode: r.pincode, product_id: r.product_id, name: r.name,
+      pincode: r.pincode, product_id: r.product_id, name: r.name, image: r.image || null,
       units: num(r.units), revenue: num(r.revenue),
     }))
   }
@@ -501,7 +505,7 @@ export class OverviewRepository {
   async vendorSkuMargins(params) {
     const { rows } = await query(
       `WITH ${FACTS_CTE}
-       SELECT so.vendor_id, oi.product_id, MAX(oi.product_name) AS name,
+       SELECT so.vendor_id, oi.product_id, MAX(oi.product_name) AS name, MAX(COALESCE(NULLIF(p.thumbnail_url, ''), NULLIF(p.images->>0, ''))) AS image,
               SUM(oi.subtotal * LEAST(a.quantity_allocated / NULLIF(oi.quantity, 0), 1)) AS revenue,
               SUM(a.quantity_allocated * COALESCE(sp.cost_price, p.cost_price))
                 FILTER (WHERE COALESCE(sp.cost_price, p.cost_price) IS NOT NULL) AS cogs,
@@ -520,7 +524,7 @@ export class OverviewRepository {
       params
     )
     return rows.map((r) => ({
-      vendor_id: r.vendor_id, product_id: r.product_id, name: r.name,
+      vendor_id: r.vendor_id, product_id: r.product_id, name: r.name, image: r.image || null,
       revenue: num(r.revenue), cogs: num(r.cogs), costed_revenue: num(r.costed_revenue),
     }))
   }
