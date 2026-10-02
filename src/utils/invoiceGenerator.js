@@ -393,13 +393,34 @@ function drawFooter(doc) {
  * drawing calls are not, so the QR is generated once up front by the
  * caller rather than mid-render).
  */
+/**
+ * QR render settings. These are what make the code scannable by a phone
+ * camera — do not "tidy" them:
+ *  - `margin: 4` is the quiet zone the QR spec requires (4 modules of white
+ *    on every side). With `margin: 0` the code touched the caption text and
+ *    the page edge and riders' scanners could not lock on (2026-10-02).
+ *  - `errorCorrectionLevel: 'L'` keeps the symbol small (fewer, larger
+ *    modules) for the ~70-char order payload; a printed/on-screen slip is
+ *    not physically damaged, so heavy redundancy only hurts readability.
+ *  - Drawn at 120pt (was 70pt) so each module is big enough for a camera
+ *    pointed at a laptop/phone screen.
+ */
+export const QR_RENDER_OPTIONS = {
+  type: 'png',
+  margin: 4,
+  width: 560,
+  errorCorrectionLevel: 'L',
+  color: { dark: '#000000', light: '#FFFFFF' },
+}
+const QR_DRAW_SIZE_PT = 120
+
 function drawQrCode(doc, qrBuffer) {
   if (!qrBuffer) return
   doc.y += 8
-  const qrSize = 70
+  const qrSize = QR_DRAW_SIZE_PT
   const qrX = PAGE_LEFT + (PAGE_WIDTH - qrSize) / 2
   doc.image(qrBuffer, qrX, doc.y, { width: qrSize, height: qrSize })
-  doc.y += qrSize + 4
+  doc.y += qrSize + 6
   doc.font('Helvetica').fontSize(7)
     .text('Scan with the FreshCuts app to watch how this order was cleaned & packed', PAGE_LEFT, doc.y, { width: PAGE_WIDTH, align: 'center' })
 }
@@ -448,7 +469,7 @@ async function generateReceiptPDF(order, opts) {
   // no QR on the receipt rather than a failed invoice/packing-slip.
   let qrBuffer = null
   try {
-    qrBuffer = await QRCode.toBuffer(buildOrderQrPayload(order), { type: 'png', margin: 0, width: 280 })
+    qrBuffer = await QRCode.toBuffer(buildOrderQrPayload(order), QR_RENDER_OPTIONS)
   } catch (err) {
     qrBuffer = null
   }
