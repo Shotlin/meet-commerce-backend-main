@@ -20,6 +20,7 @@ export const TEMPLATE_VARIABLES = [
   { key: 'total', desc: 'Amount payable, e.g. ₹380' },
   { key: 'itemSummary', desc: '"1 item" / "3 items"' },
   { key: 'items', desc: 'Item list (format varies each time)' },
+  { key: 'itemLine', desc: 'One short line, e.g. "Chicken Breast (1 kg) and 2 more"' },
   { key: 'shopName', desc: 'Store name' },
   { key: 'paymentNote', desc: 'Cash on delivery / paid online note' },
 ]
@@ -31,45 +32,48 @@ const SAMPLE_VARS = {
   total: '₹380',
   itemSummary: '2 items',
   items: '• 1 × Chicken Breast Boneless (500 g)\n• 1 × Free Range Eggs (10)',
+  itemLine: 'Chicken Breast Boneless (500 g) and 1 more',
   shopName: 'FreshCuts Kolkata',
-  paymentNote: 'Pay cash on delivery',
+  paymentNote: 'pay on delivery',
 }
 
 export const WHATSAPP_EVENTS = [
   {
     key: 'FIRST_ORDER',
     label: 'First order (new customer)',
-    hint: 'Sent instead of "Order placed" when this is the customer\'s very first order.',
+    hint: 'Sent instead of "Order placed" for a customer\'s very first order. Asks them to save the number (a saved contact is the best protection for the number).',
     defaultEnabled: true,
     defaultVariants: [
-      '{Hi|Hello|Hey} {{firstName}}, {welcome to FreshCuts|thanks for choosing FreshCuts|great to have you with us} 🙌\n\nYour first order {{orderNumber}} {is in|has been placed|is confirmed} ✅\n{{itemSummary}} · {{total}}\n{{items}}\n\n{{paymentNote}}. {We\'ll keep you posted.|You\'ll get an update when it\'s on the way.}',
-      '{{firstName}}, {thank you for your first order|your first FreshCuts order is confirmed} 🎉\n\n{Order|Ref} {{orderNumber}} • {{total}}\n{{items}}\n\n{We\'re getting it ready now.|Fresh and on its way soon.} – {{shopName}}',
-      '{Hello|Hi} {{firstName}}! {Your order|Order} {{orderNumber}} {is booked|is placed|has reached us} ✅ {Welcome aboard|Happy to serve you}.\n\n{{itemSummary}}, {{total}}.\n{{paymentNote}}.\n\n{We\'ll message you as it moves along.|More updates soon.}',
-      '{{firstName}}, {welcome!|nice to meet you!} 👋 {We\'ve received|We got} your order {{orderNumber}} ({{total}}).\n{{items}}\n{{paymentNote}}. {Sit tight, we\'ll update you.|Updates will follow here.}',
+      '{Hi|Hello|Hey} {{firstName}}, got your order {{orderNumber}} 👍 {{itemLine}}, {{total}} – {{paymentNote}}.\n\n{This is our order-updates number, save it so you don\'t miss anything.|Do save this number, all updates will come here.}',
+      '{{firstName}}, thanks for ordering with us! Order {{orderNumber}} is in. {{itemLine}}.\n{Please save this number so our updates reach you.|Save this number for delivery updates.} {Reply here if anything needs changing.|Message us here if you want to change something.}',
+      '{Namaste|Hello} {{firstName}} 🙏 your first order ({{orderNumber}}) is confirmed. {{total}}, {{paymentNote}}.\n{|{{items}}\n}{Save this number for updates 🙂|We\'ll text you here when it\'s out for delivery.}',
+      'Hi {{firstName}}! Order {{orderNumber}} received, {{itemSummary}} for {{total}}. {Save this number, updates will come here.|We\'ll update you here.} {Reply \'ok\' if the address and items look right.|Just reply here if anything is wrong.}',
     ],
   },
   {
     key: 'ORDER_PLACED',
     label: 'Order placed / confirmed',
-    hint: 'The main confirmation sent right after an order is placed (or paid online).',
+    hint: 'The confirmation sent right after an order is placed (or paid online). Tip: a line that invites a reply builds trust for the number. Remove {{items}} / {{itemLine}} from a version to leave the items out.',
     defaultEnabled: true,
     defaultVariants: [
-      '{Hi|Hello|Hey} {{firstName}}, {thanks for your order|your order is in|we\'ve received your order} 🙌\n\n{Order|Ref} {{orderNumber}} · {{total}}\n{{items}}\n\n{{paymentNote}}. {We\'ll update you once it\'s on the way.|You\'ll hear from us as it moves along.} – {{shopName}}',
-      '{{firstName}}, your order {{orderNumber}} {is confirmed|has been placed|is booked} ✅\n{{itemSummary}} • {{total}}\n\n{Thank you for choosing FreshCuts.|We\'re getting it ready now.|Fresh stuff coming your way soon.}',
-      '{Hello|Hi} {{firstName}}! {We\'ve got|Received} your order {{orderNumber}} ({{total}}).\n{{items}}\n{{paymentNote}}.\n\n{We\'ll message you when it\'s out for delivery.|More updates soon.}',
-      '{{firstName}}, {all set|done} ✅ {Order|Your order} {{orderNumber}} {is in the system|is placed|is confirmed}.\n{{itemSummary}}, {{total}}. {{paymentNote}}.\n{Thanks!|Thank you!|Appreciate it!} – {{shopName}}',
-      '{Thanks|Thank you} {{firstName}} 🙏 {Your|The} order {{orderNumber}} {is confirmed|has been received}.\n\n{{items}}\n{{total}} · {{paymentNote}}\n\n{We\'ll keep you posted here.|Updates will come on this chat.}',
+      '{Hi|Hello|Hey} {{firstName}}, order {{orderNumber}} is confirmed 👍 {{itemLine}}, {{total}}. {{paymentNote}}.{||| Reply if you want to change anything.}{||||\n\nReply STOP to stop these messages.}',
+      '{{firstName}}, we\'ve got your order! {{orderNumber}} – {{itemSummary}}, {{total}}.\n{We\'ll let you know when it leaves the store.|You\'ll get an update here once it\'s on the way.}',
+      'Thanks {{firstName}} 🙏 {{itemLine}} is booked ({{orderNumber}}). {{paymentNote}}, {{total}}. {Reply \'ok\' if the address is right.|Tell us here if anything looks off.}',
+      '{Hi|Hello} {{firstName}}, {your order is in|order received}: {{orderNumber}}.\n{{items}}\n{{total}} – {{paymentNote}}.{||| We\'ll update you soon.}',
+      '{{firstName}}, {all good|done} ✅ {{orderNumber}} is confirmed. {{itemLine}}. {{paymentNote}}.{||\n\nReply STOP to stop these messages.}',
+      '{Order|Booking} {{orderNumber}} {confirmed|is in} {🙂|👍|✅} {Hi|Hello} {{firstName}}, {we\'ll start packing now|the store has it}. {{total}}, {{paymentNote}}.{||| Reply if the address is wrong.}',
+      '{{firstName}}, {thank you|thanks} for ordering {🙏|}. {{itemSummary}} – {{itemLine}}.\n{{total}} · {{paymentNote}} · {{orderNumber}}\n{{Will keep you posted here.|You\'ll get updates on this chat.}|}',
     ],
   },
   {
     key: 'CONFIRMED',
     label: 'Order accepted by store',
-    hint: 'The store accepted the order. Off by default — it can feel repetitive after the confirmation.',
+    hint: 'The store accepted the order. Off by default — it can feel repetitive right after the confirmation.',
     defaultEnabled: false,
     defaultVariants: [
-      '{Good news|Update} {{firstName}} — {{shopName}} {has accepted|confirmed} your order {{orderNumber}} 👍',
-      '{{firstName}}, order {{orderNumber}} {is confirmed by the store|has been accepted}. {Packing begins shortly.|We\'re on it.}',
-      '{Hi|Hello} {{firstName}}, {the store is on it|your order is accepted} — {{orderNumber}}.',
+      '{{firstName}}, the store has accepted order {{orderNumber}} 👍 {Packing it now.|Getting it ready.}',
+      '{Hi|Hello} {{firstName}}, {{orderNumber}} is accepted. {We\'re on it.|Will update you soon.}',
+      'Update on {{orderNumber}}: accepted by the store, being prepared {🙂|}',
     ],
   },
   {
@@ -78,9 +82,9 @@ export const WHATSAPP_EVENTS = [
     hint: 'Packed and waiting for the delivery partner. Off by default.',
     defaultEnabled: false,
     defaultVariants: [
-      '{{firstName}}, order {{orderNumber}} {is packed|is packed and ready} 📦 {A delivery partner will pick it up shortly.|Pickup is next.}',
-      '{Update|Quick update}: {{orderNumber}} {has been packed|is ready}. {On its way soon.|Rider pickup next.}',
-      '{Hi|Hello} {{firstName}}, {your order is packed|packing is done} — {{orderNumber}} 📦',
+      '{{firstName}}, {{orderNumber}} is packed 📦 {Rider pickup is next.|It will leave shortly.}',
+      '{Hi|Hello} {{firstName}}, packing done for {{orderNumber}}. {Out for delivery soon.|On its way shortly.}',
+      '{{orderNumber}} is packed and ready {🙂|}{ {{firstName}}|}',
     ],
   },
   {
@@ -89,9 +93,9 @@ export const WHATSAPP_EVENTS = [
     hint: 'The rider picked up the order. (The delivery OTP is never sent over WhatsApp.)',
     defaultEnabled: false,
     defaultVariants: [
-      '{{firstName}}, your order {{orderNumber}} is {out for delivery|on its way} 🛵 {Please keep your phone handy.|Please be reachable.}',
-      '{On the way|Heads up} {{firstName}} — {{orderNumber}} {has left the store|is with our rider now} 🛵 {Check the app for the delivery code.|The delivery code is in the app.}',
-      '{Hi|Hello} {{firstName}}, {rider is heading to you|your delivery is moving} with {{orderNumber}}. {See you soon!|Almost there.}',
+      '{{firstName}}, your order {{orderNumber}} is on its way 🛵 {Please keep your phone nearby.|Please be reachable on call.}',
+      '{Out for delivery|On the way} {{firstName}} – {{orderNumber}}. {The delivery code is in the app.|You\'ll find the delivery code in the app.}',
+      '{Hi|Hello} {{firstName}}, the rider has left with {{orderNumber}} {🛵|}. {See you soon!|Almost there.}',
     ],
   },
   {
@@ -100,9 +104,9 @@ export const WHATSAPP_EVENTS = [
     hint: 'Order delivered. Off by default.',
     defaultEnabled: false,
     defaultVariants: [
-      '{{firstName}}, order {{orderNumber}} {has been delivered|is delivered} ✅ {Hope you enjoy it!|Enjoy!|Thank you for ordering with FreshCuts.}',
-      '{Delivered|All done} {{firstName}} — {{orderNumber}} {reached you|is with you}. {Thanks for choosing FreshCuts.|Let us know if anything is off.}',
-      '{Hi|Hello} {{firstName}}, {your order was delivered|delivery complete}: {{orderNumber}} 🙌 {Do reach out if something\'s not right.|We\'d love to serve you again.}',
+      '{{firstName}}, {{orderNumber}} is delivered ✅ {Hope you like it!|Enjoy!} {Tell us here if anything\'s not right.|Message us if there\'s any issue.}',
+      '{Delivered|All done} – {{orderNumber}}. {Thanks {{firstName}}!|Thank you {{firstName}} 🙏} {Reply here if something is wrong.|Do tell us how it was.}',
+      '{Hi|Hello} {{firstName}}, your order reached you ({{orderNumber}}). {Hope everything is fresh!|Hope all is good.}',
     ],
   },
   {
@@ -111,9 +115,9 @@ export const WHATSAPP_EVENTS = [
     hint: 'Order cancelled (by customer, store or system).',
     defaultEnabled: false,
     defaultVariants: [
-      '{{firstName}}, order {{orderNumber}} {has been cancelled|was cancelled}. {If you paid online, the amount will be returned to you.|Any online payment will be refunded.}',
-      '{Hi|Hello} {{firstName}}, {we\'ve cancelled|cancellation done for} {{orderNumber}}. {Reply here if you need help.|Sorry for the trouble.}',
-      '{Update|Note}: order {{orderNumber}} is {cancelled|now cancelled}. {Refunds, if any, are processed automatically.|We hope to serve you soon.}',
+      '{{firstName}}, order {{orderNumber}} has been cancelled. {If you paid online, the money goes back to you automatically.|Any online payment will be refunded.}',
+      '{Hi|Hello} {{firstName}}, {{orderNumber}} is cancelled. {Sorry for the trouble – reply here if you need help.|Message us here if you have questions.}',
+      'Update: {{orderNumber}} is now cancelled. {Refunds, if any, are processed automatically.|Hope to serve you again soon.}',
     ],
   },
   {
@@ -122,9 +126,9 @@ export const WHATSAPP_EVENTS = [
     hint: 'A refund was issued for the order.',
     defaultEnabled: false,
     defaultVariants: [
-      '{{firstName}}, your refund for order {{orderNumber}} {has been processed|is done} 💰 {It should reflect shortly.|Thanks for your patience.}',
-      '{Hi|Hello} {{firstName}}, {refund processed|we\'ve refunded your payment} for {{orderNumber}}. {It may take a little time to show up.|Thank you for waiting.}',
-      '{Update|Good news}: {the refund for {{orderNumber}} is processed|{{orderNumber}} refund is on its way back to you}.',
+      '{{firstName}}, your refund for {{orderNumber}} is done 💰 {It can take a little while to show up.|It should reflect shortly.}',
+      '{Hi|Hello} {{firstName}}, we\'ve refunded {{orderNumber}}. {Thanks for your patience.|Let us know if it doesn\'t show up.}',
+      'Refund processed for {{orderNumber}}. {Thank you {{firstName}}.|Sorry again for the trouble.}',
     ],
   },
 ]
@@ -201,6 +205,13 @@ export function formatItems(items, rng = Math.random, max = 6) {
   return extra > 0 ? `${text}${style === 2 ? ' ' : '\n'}+${extra} more` : text
 }
 
+/** "Name" / "Name and 2 more" — one natural line instead of a list. */
+export function formatItemLine(items) {
+  const list = (items || []).filter((i) => i && i.name)
+  if (!list.length) return 'your items'
+  return list.length === 1 ? list[0].name : `${list[0].name} and ${list.length - 1} more`
+}
+
 export function formatRupees(amount) {
   const n = Number(amount)
   if (!Number.isFinite(n)) return ''
@@ -221,7 +232,7 @@ export function renderMessage(variants, vars, { lastIndex = -1, lastBody = null,
     let index = Math.floor(rng() * pool.length)
     if (pool.length > 1 && index === lastIndex) index = (index + 1 + Math.floor(rng() * (pool.length - 1))) % pool.length
     const items = vars?.itemList
-    const fullVars = { ...vars, items: vars?.items ?? formatItems(items, rng) }
+    const fullVars = { ...vars, items: vars?.items ?? formatItems(items, rng), itemLine: vars?.itemLine ?? formatItemLine(items) }
     const body = tidyMessage(fillVariables(resolveSpintax(pool[index], rng), fullVars))
     result = { body, index }
     if (body && body !== lastBody) break

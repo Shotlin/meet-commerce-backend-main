@@ -9,6 +9,7 @@ import {
   getSampleVars,
   renderMessage,
   formatItems,
+  formatItemLine,
   formatRupees,
   countCombinations,
   TEMPLATE_VARIABLES,
@@ -60,10 +61,10 @@ export function buildTemplateVars(ctx) {
   const total = Number(ctx.total_payable) || 0
   const paidOnline = ctx.payment_status === 'PAID'
   const paymentNote = paidOnline
-    ? 'Paid online ✅'
+    ? 'already paid online'
     : walletPaid > 0
       ? `${formatRupees(Math.max(0, total - walletPaid))} to pay on delivery`
-      : 'Pay cash on delivery'
+      : 'pay on delivery'
   return {
     name: name || 'Customer',
     firstName,
@@ -71,6 +72,7 @@ export function buildTemplateVars(ctx) {
     total: formatRupees(total),
     itemSummary: `${items.length} ${items.length === 1 ? 'item' : 'items'}`,
     itemList: items,
+    itemLine: formatItemLine(items),
     shopName: ctx.shop_name || 'FreshCuts',
     paymentNote,
   }

@@ -65,7 +65,16 @@ describe('rendering', () => {
   })
   it('order confirmation offers a lot of distinct texts', () => {
     const ev = WHATSAPP_EVENTS.find((e) => e.key === 'ORDER_PLACED')
-    expect(countCombinations(ev.defaultVariants)).toBeGreaterThan(100)
+    expect(countCombinations(ev.defaultVariants)).toBeGreaterThan(150)
+  })
+  it('stays short and casual: no event produces a wall of text', () => {
+    const vars = { ...getSampleVars(), itemList: [{ name: 'Chicken', quantity: 1 }] }
+    for (const ev of WHATSAPP_EVENTS) for (let i = 0; i < 80; i++) expect(renderMessage(ev.defaultVariants, vars).body.length).toBeLessThan(330)
+  })
+  it('first-order message asks to save the number and never contains a link', () => {
+    const ev = WHATSAPP_EVENTS.find((e) => e.key === 'FIRST_ORDER')
+    for (const v of ev.defaultVariants) expect(v.toLowerCase()).toContain('save')
+    for (const e of WHATSAPP_EVENTS) for (const v of e.defaultVariants) expect(v).not.toMatch(/https?:|www\./)
   })
 })
 
@@ -112,7 +121,7 @@ describe('phone + pacing helpers', () => {
       customer_name: 'Rahul Sharma', order_number: 'FC-1', total_payable: '380.00', payment_status: 'PENDING',
       wallet_amount: '0', shop_name: 'FreshCuts Kolkata', items: [{ name: 'Eggs', quantity: 2 }],
     })
-    expect(v).toMatchObject({ firstName: 'Rahul', total: '₹380', itemSummary: '1 item', paymentNote: 'Pay cash on delivery' })
-    expect(buildTemplateVars({ customer_name: '', order_number: 'x', total_payable: 10, payment_status: 'PAID', items: [] }).paymentNote).toBe('Paid online ✅')
+    expect(v).toMatchObject({ firstName: 'Rahul', total: '₹380', itemSummary: '1 item', paymentNote: 'pay on delivery', itemLine: 'Eggs' })
+    expect(buildTemplateVars({ customer_name: '', order_number: 'x', total_payable: 10, payment_status: 'PAID', items: [] }).paymentNote).toBe('already paid online')
   })
 })
