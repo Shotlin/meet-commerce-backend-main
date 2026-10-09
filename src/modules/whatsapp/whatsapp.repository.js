@@ -3,7 +3,7 @@ import { query } from '../../config/database.js'
 const SETTINGS_COLUMNS = `
   id, enabled, country_code, send_delay_min_sec, send_delay_max_sec, min_gap_sec, max_gap_sec,
   typing_simulation, hourly_cap, daily_cap, warmup_enabled, quiet_hours_enabled,
-  quiet_start_min, quiet_end_min, connected_phone, connected_name,
+  quiet_start_min, quiet_end_min, chat_retention_days, connected_phone, connected_name,
   first_connected_at, last_connected_at, updated_at`
 
 const SETTINGS_FIELD_MAP = {
@@ -20,6 +20,7 @@ const SETTINGS_FIELD_MAP = {
   quietHoursEnabled: 'quiet_hours_enabled',
   quietStartMin: 'quiet_start_min',
   quietEndMin: 'quiet_end_min',
+  chatRetentionDays: 'chat_retention_days',
 }
 
 let settingsCache = { value: null, expiresAt: 0 }

@@ -1,6 +1,7 @@
 import { logger } from '../../config/logger.js'
 import { WhatsAppRepository } from './whatsapp.repository.js'
 import { getWhatsAppManager } from './whatsapp.manager.js'
+import { getWhatsAppChatService } from './whatsapp.chat.service.js'
 import {
   WHATSAPP_EVENTS,
   EVENT_KEYS,
@@ -90,6 +91,7 @@ export class WhatsAppService {
   }
 
   async start() {
+    getWhatsAppChatService().start()
     await this.manager.start()
     this.timer = setInterval(() => { this.tick().catch((e) => log.error({ err: e.message }, 'WhatsApp tick failed')) }, 4000)
     this.timer.unref?.()
@@ -97,6 +99,7 @@ export class WhatsAppService {
 
   async stop() {
     clearInterval(this.timer)
+    getWhatsAppChatService().stop()
     await this.manager.stop()
   }
 
@@ -128,6 +131,7 @@ export class WhatsAppService {
       quietHoursEnabled: s.quiet_hours_enabled,
       quietStartMin: s.quiet_start_min,
       quietEndMin: s.quiet_end_min,
+      chatRetentionDays: s.chat_retention_days,
       connectedPhone: s.connected_phone,
       connectedName: s.connected_name,
       firstConnectedAt: s.first_connected_at,
@@ -142,6 +146,10 @@ export class WhatsAppService {
     if (next.minGapSec > next.maxGapSec) throw this._bad('Minimum gap cannot be above the maximum gap')
     if (next.hourlyCap > next.dailyCap) throw this._bad('Hourly limit cannot be above the daily limit')
     const saved = await this.repo.updateSettings(patch, adminId)
+    // A new retention window re-times every chat from its own last message.
+    if (patch.chatRetentionDays !== undefined && patch.chatRetentionDays !== current.chat_retention_days) {
+      await getWhatsAppChatService().applyRetention(patch.chatRetentionDays)
+    }
     return this._publicSettings(saved)
   }
 
@@ -299,8 +307,12 @@ export class WhatsAppService {
       }
 
       try {
-        const { messageId } = await this.manager.sendText(msg.phone, msg.body, { typing: settings.typing_simulation })
+        const { messageId, jid } = await this.manager.sendText(msg.phone, msg.body, { typing: settings.typing_simulation })
         await this.repo.markSent(msg.id, messageId)
+        // Keep the inbox thread complete (best-effort, never affects the send).
+        getWhatsAppChatService()
+          .recordAutomated({ jid, phone: msg.phone, body: msg.body, waMessageId: messageId })
+          .catch((e) => log.warn({ err: e.message }, 'could not record automated message in inbox'))
         this.consecutiveFailures = 0
       } catch (err) {
         if (err.code === 'NOT_ON_WHATSAPP') {

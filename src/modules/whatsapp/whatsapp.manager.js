@@ -17,6 +17,7 @@ import { useDbAuthState } from './whatsapp.auth-state.js'
  */
 const LOCK_KEY = 7_726_001
 const log = logger
+const MAX_INCOMING_MEDIA_BYTES = 16 * 1024 * 1024
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -213,20 +214,74 @@ export class WhatsAppManager extends EventEmitter {
     this.reconnectTimer.unref?.()
   }
 
-  /** STOP / UNSUBSCRIBE replies are honoured automatically. */
+  /**
+   * Every message that reaches the linked number. STOP / UNSUBSCRIBE replies
+   * are honoured automatically; everything else is handed to the inbox as an
+   * 'incoming' event (files are downloaded up to the size cap).
+   */
   _handleIncoming(message) {
-    try {
-      if (message.key?.fromMe) return
-      const text = (message.message?.conversation || message.message?.extendedTextMessage?.text || '').trim()
-      if (!/^(stop|unsubscribe|cancel messages?)$/i.test(text)) return
-      const jid = [message.key.remoteJidAlt, message.key.senderPn, message.key.remoteJid]
-        .find((j) => j && String(j).endsWith('@s.whatsapp.net'))
-      const phone = phoneFromJid(jid)
-      if (phone) {
-        this.repo.addOptOut(phone).catch(() => {})
-        log.info({ phone }, 'Customer opted out of WhatsApp messages')
+    this._processIncoming(message).catch((err) => log.warn({ err: err.message }, 'incoming message handling failed'))
+  }
+
+  async _processIncoming(message) {
+    const remote = message.key?.remoteJid
+    if (!remote || remote.endsWith('@g.us') || remote.includes('broadcast') || remote.endsWith('@newsletter')) return
+
+    const fromMe = !!message.key.fromMe
+    const jid = [message.key.remoteJidAlt, message.key.senderPn, remote]
+      .find((j) => j && String(j).endsWith('@s.whatsapp.net')) || remote
+    const phone = jid.endsWith('@s.whatsapp.net') ? phoneFromJid(jid) : null
+
+    let m = message.message
+    m = m?.ephemeralMessage?.message || m?.viewOnceMessage?.message || m?.viewOnceMessageV2?.message || m
+    if (!m) return
+
+    const text = m.conversation || m.extendedTextMessage?.text || ''
+    if (!fromMe && /^\s*(stop|unsubscribe|cancel messages?)\s*$/i.test(text) && phone) {
+      this.repo.addOptOut(phone).catch(() => {})
+      log.info({ phone }, 'Customer opted out of WhatsApp messages')
+    }
+
+    const kinds = [
+      ['imageMessage', 'image'], ['videoMessage', 'video'], ['audioMessage', 'audio'],
+      ['documentMessage', 'document'], ['stickerMessage', 'sticker'],
+    ]
+    const found = kinds.find(([k]) => m[k])
+    let type = 'text'
+    let body = text
+    let media = null
+
+    if (found) {
+      const [key, kind] = found
+      const node = m[key]
+      type = kind
+      body = node.caption || (kind === 'document' ? node.fileName : '') || ''
+      const size = Number(node.fileLength) || 0
+      if (size && size > MAX_INCOMING_MEDIA_BYTES) {
+        body = `${body ? `${body} · ` : ''}[file too large to store]`
+      } else {
+        try {
+          const { downloadMediaMessage } = await this._loadBaileys()
+          const buffer = await downloadMediaMessage(message, 'buffer', {}, {
+            logger: logger.child({ module: 'baileys' }),
+            reuploadRequest: this.sock?.updateMediaMessage,
+          })
+          media = { buffer, mime: node.mimetype || 'application/octet-stream', name: node.fileName || null }
+        } catch (err) {
+          log.warn({ err: err.message, type }, 'could not download incoming media')
+          body = `${body ? `${body} · ` : ''}[file could not be downloaded]`
+        }
       }
-    } catch { /* never let an incoming message break the socket */ }
+    } else if (!text) {
+      return // reactions, polls, protocol messages…
+    }
+
+    this.emit('incoming', {
+      jid, phone, fromMe, type, body, media,
+      name: message.pushName || null,
+      waMessageId: message.key.id || null,
+      timestamp: message.messageTimestamp ? Number(message.messageTimestamp) * 1000 : Date.now(),
+    })
   }
 
   /**
@@ -251,6 +306,13 @@ export class WhatsAppManager extends EventEmitter {
       } catch { /* presence is cosmetic */ }
     }
     const result = await this.sock.sendMessage(jid, { text: body })
+    return { messageId: result?.key?.id || null, jid }
+  }
+
+  /** Raw send for inbox replies (text or files) to a conversation that already exists. */
+  async sendRaw(jid, content) {
+    if (this.state !== 'CONNECTED' || !this.sock) throw Object.assign(new Error('WhatsApp not connected'), { code: 'NOT_CONNECTED' })
+    const result = await this.sock.sendMessage(jid, content)
     return { messageId: result?.key?.id || null }
   }
 

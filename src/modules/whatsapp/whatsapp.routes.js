@@ -1,5 +1,6 @@
 import { getWhatsAppService } from './whatsapp.service.js'
 import { getWhatsAppManager } from './whatsapp.manager.js'
+import { getWhatsAppChatService, MAX_MEDIA_BYTES } from './whatsapp.chat.service.js'
 import { EVENT_KEYS } from './whatsapp.templates.js'
 import { success } from '../../utils/apiResponse.js'
 
@@ -22,6 +23,7 @@ import { success } from '../../utils/apiResponse.js'
 export default async function whatsappRoutes(fastify) {
   const service = getWhatsAppService()
   const manager = getWhatsAppManager()
+  const chat = getWhatsAppChatService()
   const adminAuth = [fastify.authenticate, fastify.requireAdmin]
   const tags = ['Admin - WhatsApp']
   const eventParams = { type: 'object', properties: { key: { type: 'string', enum: EVENT_KEYS } }, required: ['key'] }
@@ -59,6 +61,7 @@ export default async function whatsappRoutes(fastify) {
           quietHoursEnabled: { type: 'boolean' },
           quietStartMin: int(0, 1439),
           quietEndMin: int(0, 1439),
+          chatRetentionDays: int(1, 90),
         },
       },
     },
@@ -144,5 +147,73 @@ export default async function whatsappRoutes(fastify) {
   }, async (req, reply) => {
     await service.removeOptOut(req.params.phone)
     return reply.send(success(null, 'Customer can receive WhatsApp messages again'))
+  })
+
+  // ─── Inbox ────────────────────────────────────────────────────────────────
+  const idParams = { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] }
+
+  fastify.get('/inbox/conversations', {
+    schema: {
+      tags,
+      querystring: {
+        type: 'object',
+        properties: { search: { type: 'string', maxLength: 60 }, unread: { type: 'boolean' }, limit: int(1, 200) },
+      },
+    },
+    preHandler: adminAuth,
+  }, async (req, reply) =>
+    reply.send(success(await chat.listConversations({
+      search: req.query.search, unreadOnly: req.query.unread, limit: req.query.limit || 100,
+    }), 'Conversations')))
+
+  fastify.get('/inbox/conversations/:id/messages', {
+    schema: {
+      tags,
+      params: idParams,
+      querystring: { type: 'object', properties: { before: { type: 'string', format: 'date-time' }, limit: int(1, 200) } },
+    },
+    preHandler: adminAuth,
+  }, async (req, reply) =>
+    reply.send(success(await chat.getThread(req.params.id, { before: req.query.before, limit: req.query.limit || 100 }), 'Messages')))
+
+  fastify.post('/inbox/conversations/:id/read', { schema: { tags, params: idParams }, preHandler: adminAuth }, async (req, reply) => {
+    await chat.markRead(req.params.id)
+    return reply.send(success(null, 'Marked as read'))
+  })
+
+  fastify.post('/inbox/conversations/:id/messages', {
+    schema: { tags, params: idParams, body: { type: 'object', required: ['text'], properties: { text: { type: 'string', maxLength: 4000 } } } },
+    preHandler: adminAuth,
+  }, async (req, reply) =>
+    reply.send(success((await chat.sendText(req.params.id, req.body.text)).message, 'Message sent')))
+
+  fastify.post('/inbox/conversations/:id/media', {
+    schema: { tags, params: idParams, consumes: ['multipart/form-data'], querystring: { type: 'object', properties: { caption: { type: 'string', maxLength: 1000 } } } },
+    preHandler: adminAuth,
+  }, async (req, reply) => {
+    const file = await req.file({ limits: { fileSize: MAX_MEDIA_BYTES } })
+    if (!file) return reply.code(400).send({ success: false, message: 'No file uploaded', code: 'NO_FILE' })
+    const buffer = await file.toBuffer()
+    if (file.file.truncated) return reply.code(400).send({ success: false, message: 'File is too large (max 16 MB)', code: 'FILE_TOO_LARGE' })
+    const result = await chat.sendFile(req.params.id, {
+      buffer, mime: file.mimetype, name: file.filename, caption: req.query.caption,
+    })
+    return reply.send(success(result.message, 'File sent'))
+  })
+
+  fastify.get('/inbox/media/:id', { schema: { tags, params: idParams }, preHandler: adminAuth }, async (req, reply) => {
+    const media = await chat.getMedia(req.params.id)
+    if (!media) return reply.code(404).send({ success: false, message: 'File not found (it may have expired)', code: 'NOT_FOUND' })
+    const name = media.media_name || 'file'
+    return reply
+      .header('Content-Type', media.media_mime || 'application/octet-stream')
+      .header('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(name)}`)
+      .header('X-Content-Type-Options', 'nosniff')
+      .send(media.data)
+  })
+
+  fastify.delete('/inbox/conversations/:id', { schema: { tags, params: idParams }, preHandler: adminAuth }, async (req, reply) => {
+    await chat.deleteConversation(req.params.id)
+    return reply.send(success(null, 'Conversation deleted'))
   })
 }
