@@ -8,6 +8,7 @@ import { UploadsService } from '../uploads/uploads.service.js'
 import { CashbackService } from '../cashback/cashback.service.js'
 import { emit as emitAudit } from '../../utils/audit-log.js'
 import { parseOrderQr } from './pickup-qr.js'
+import { broadcastRiderLocation, invalidateRiderActiveOrders } from '../../plugins/socketio.plugin.js'
 
 // Wrong customer-OTP guesses allowed per order before the rider must resend or use a proof photo.
 const MAX_OTP_ATTEMPTS = 5
@@ -837,23 +838,10 @@ export class DeliveryService {
   async updateLocation(riderId, latitude, longitude) {
     await this.repository.updateLocation(riderId, latitude, longitude)
 
-    // Broadcast to admin dashboard and customers tracking this rider.
-    // Sent to both the `order:<id>` room (joined via order:track,
-    // which doesn't survive a socket reconnect unless the client
-    // explicitly rejoins) AND directly to the customer's own
-    // `user:<id>` room (joined automatically on every connect) so a
-    // dropped room join can't silently stop location updates.
-    if (this.fastify?.emitOrderUpdate) {
-      const orders = await this.repository.getAssignedOrders(riderId, 'IN_TRANSIT')
-      for (const order of orders) {
-        this.fastify.emitOrderUpdate(order.order_id, [order.customer_id], {
-          type: 'RIDER_LOCATION',
-          lat: latitude,
-          lng: longitude,
-          riderId,
-        })
-      }
-    }
+    // Customers waiting on an order this rider holds (accepted, picked up or
+    // in transit) get the position on the same `rider:location:update` event
+    // the socket path uses.
+    await broadcastRiderLocation(riderId, { latitude, longitude })
   }
 
   async getDeliveryHistory(riderId, page = 1, limit = 20) {
@@ -1093,6 +1081,10 @@ export class DeliveryService {
 
   _emitOrderUpdate(orderId, data, userIds = []) {
     try {
+      // Assignment state just changed (accept / pickup / deliver): drop the
+      // cached "orders this rider serves" list so the next position fix
+      // reaches the right customers immediately.
+      if (data?.riderId) invalidateRiderActiveOrders(data.riderId)
       if (this.fastify?.emitOrderUpdate) {
         this.fastify.emitOrderUpdate(orderId, userIds, {
           orderId,

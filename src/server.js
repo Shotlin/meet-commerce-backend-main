@@ -6,6 +6,7 @@ import { logger } from './config/logger.js'
 import { runPermissionAudit } from './utils/permission-audit.js'
 import { refreshRazorpayClient } from './config/razorpay.js'
 import { ShiprocketOrdersService } from './modules/shiprocket/shiprocket.orders.service.js'
+import { getWhatsAppService } from './modules/whatsapp/whatsapp.service.js'
 import { startCampaignScheduler, stopCampaignScheduler } from './workers/campaign-scheduler.worker.js'
 import { startPaymentExpiryWorker, stopPaymentExpiryWorker } from './workers/payment-expiry.worker.js'
 import {
@@ -96,6 +97,11 @@ const start = async () => {
     // captured but the app never confirmed back to us)
     startWalletTopupReconciliationWorker()
 
+    // WhatsApp (unofficial) order messaging — reconnects a saved session and
+    // runs the paced send loop. API process only (one socket per number).
+    const whatsapp = getWhatsAppService()
+    whatsapp.start().catch((err) => logger.error({ err: err.message }, 'WhatsApp start failed'))
+
     // PM2 ready signal
     if (process.send) {
       process.send('ready')
@@ -122,6 +128,9 @@ const start = async () => {
 
       // Stop wallet top-up reconciliation worker
       stopWalletTopupReconciliationWorker()
+
+      // Release the WhatsApp session lock + close the socket
+      await whatsapp.stop().catch(() => {})
 
       // Close Socket.IO
       if (app.io) {

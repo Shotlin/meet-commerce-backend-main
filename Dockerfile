@@ -1,6 +1,8 @@
 # ─── Stage 1: Install dependencies ─────────────────────
 FROM node:20-alpine AS deps
 WORKDIR /app
+# git: @whiskeysockets/baileys pulls `libsignal` from a git URL
+RUN apk add --no-cache git
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 

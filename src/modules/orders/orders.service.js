@@ -8,6 +8,7 @@
 import crypto from 'node:crypto'
 import { logger } from '../../config/logger.js'
 import { publishOrderStatus } from './order-events.js'
+import { notifyOrderWhatsApp } from '../whatsapp/whatsapp.service.js'
 import { getClient } from '../../config/database.js'
 import { CartRepository } from '../cart/cart.repository.js'
 import { CartService } from '../cart/cart.service.js'
@@ -348,6 +349,10 @@ export class OrdersService {
       } catch (err) {
         logger.warn({ err: err.message, orderId: order.id }, 'Dashboard new-order socket emit failed (non-critical)')
       }
+      // WhatsApp order confirmation (no-op unless an admin linked a number and
+      // switched it on). An outstanding ONLINE order gets this later, from the
+      // ORDER_PLACED notification sent when the payment is confirmed.
+      notifyOrderWhatsApp(order.id, 'ORDER_PLACED')
     }
 
     logger.info({ customerId, orderIds: created.map((order) => order.id) }, 'Mobile checkout completed')
@@ -376,7 +381,7 @@ export class OrdersService {
   /** Most recent order still in progress — powers the mobile "track your order" banner. */
   async getActiveOrder(customerId) {
     const order = await this.repository.getActiveOrder(customerId)
-    return this._withDeliveryOtp(order)
+    return this._withTracking(await this._withDeliveryOtp(order))
   }
 
   /**
@@ -392,6 +397,23 @@ export class OrdersService {
     try {
       const otp = await this.repository.getActiveDeliveryOtp(order.id)
       return otp ? { ...order, deliveryOtp: otp } : order
+    } catch {
+      return order
+    }
+  }
+
+  /**
+   * Attaches the live-tracking block (rider, rider position, store,
+   * destination, phase) to an order handed to its OWNER while a rider holds
+   * it. Best-effort: a failure just means the map shows what it already had.
+   */
+  async _withTracking(order) {
+    if (!order || !this.repository.getTrackingSnapshot) return order
+    const status = `${order.status || ''}`.toUpperCase()
+    if (['CANCELLED', 'DELIVERED', 'COMPLETED', 'RETURNED', 'REFUNDED'].includes(status)) return order
+    try {
+      const tracking = await this.repository.getTrackingSnapshot(order.id)
+      return tracking ? { ...order, tracking } : order
     } catch {
       return order
     }
@@ -743,7 +765,7 @@ export class OrdersService {
       err.code = 'ORDER_NOT_FOUND'
       throw err
     }
-    return isOwner ? this._withDeliveryOtp(order) : order
+    return isOwner ? this._withTracking(await this._withDeliveryOtp(order)) : order
   }
 
   async listOrders(params = {}) {

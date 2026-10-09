@@ -1,5 +1,6 @@
 import { sendPush } from '../../utils/pushNotification.js'
 import { logger } from '../../config/logger.js'
+import { notifyOrderWhatsApp } from '../whatsapp/whatsapp.service.js'
 
 /**
  * Notifications service — business logic for notifications
@@ -90,6 +91,12 @@ export class NotificationsService {
     // toggle semantics. A missing settings row (shouldn't happen once the
     // migration has run, but defensive) falls through to whatever the
     // caller already built, unchanged.
+    // WhatsApp is a separate channel with its own per-event switches, so it is
+    // triggered before (and independently of) the push on/off gate below.
+    if (type === 'ORDER_STATUS' && data?.orderId && data?.timelineType) {
+      notifyOrderWhatsApp(data.orderId, data.timelineType)
+    }
+
     if (type === 'ORDER_STATUS' && data?.timelineType) {
       try {
         const { OrderNotificationSettingsRepository } = await import(

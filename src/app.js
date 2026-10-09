@@ -296,6 +296,11 @@ export const buildApp = async () => {
     prefix: "/api/v1/admin/shiprocket",
   });
 
+  // WhatsApp (unofficial) order messaging [ADMIN] — link number, templates, limits
+  await app.register(import("./modules/whatsapp/whatsapp.routes.js"), {
+    prefix: "/api/v1/admin/whatsapp",
+  });
+
   // Admin — fully implemented
   await app.register(import("./modules/admin/admin.routes.js"), {
     prefix: "/api/v1/admin",

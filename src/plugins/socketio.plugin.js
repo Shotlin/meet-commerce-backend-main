@@ -34,6 +34,67 @@ function expandLoopbackOrigins(originList) {
   return Array.from(expanded)
 }
 
+
+// ─── Rider → customer live location fan-out ────────────────────────────
+// The rider app does not (reliably) send `orderId` with its position, and the
+// REST fallback never carried one, so the customer's order room used to get
+// nothing. The orders a rider is currently serving are therefore resolved
+// from the DB (accepted / picked up / in transit) and cached for a few
+// seconds, and the position is fanned out to each order's room AND the
+// customer's own `user:` room (joined on every connect, survives reconnects).
+const ACTIVE_ORDERS_TTL_MS = 8000
+const riderActiveOrdersCache = new Map()
+
+async function getRiderActiveOrders(riderId) {
+  const cached = riderActiveOrdersCache.get(riderId)
+  if (cached && cached.expires > Date.now()) return cached.orders
+  const { rows } = await query(
+    `SELECT da.order_id, o.customer_id, da.status
+       FROM delivery_assignments da
+       JOIN orders o ON o.id = da.order_id
+      WHERE da.rider_id = $1
+        AND da.status IN ('ACCEPTED', 'PICKED_UP', 'IN_TRANSIT')`,
+    [riderId]
+  )
+  const orders = rows.map((r) => ({
+    orderId: r.order_id,
+    customerId: r.customer_id,
+    phase: r.status === 'ACCEPTED' ? 'TO_STORE' : 'TO_CUSTOMER',
+  }))
+  riderActiveOrdersCache.set(riderId, { orders, expires: Date.now() + ACTIVE_ORDERS_TTL_MS })
+  return orders
+}
+
+export function invalidateRiderActiveOrders(riderId) {
+  riderActiveOrdersCache.delete(riderId)
+}
+
+/**
+ * Pushes a rider's latest position to every customer waiting on an order the
+ * rider currently holds. Never throws. Used by the socket handler and by the
+ * REST location fallback.
+ */
+export async function broadcastRiderLocation(riderId, { latitude, longitude, heading = null, speed = null }, io = activeIo) {
+  if (!io) return
+  try {
+    const orders = await getRiderActiveOrders(riderId)
+    for (const o of orders) {
+      io.to(`order:${o.orderId}`).to(`user:${o.customerId}`).emit('rider:location:update', {
+        orderId: o.orderId,
+        riderId,
+        latitude,
+        longitude,
+        heading,
+        speed,
+        phase: o.phase,
+        timestamp: Date.now(),
+      })
+    }
+  } catch (err) {
+    logger.error({ err, riderId }, 'Rider location fan-out failed')
+  }
+}
+
 export function getSocketIo() {
   return activeIo
 }
@@ -167,16 +228,13 @@ async function socketioPlugin(fastify) {
             [latitude, longitude, userId]
           )
 
-          // Broadcast to order room (customer tracking)
-          if (orderId) {
-            io.to(`order:${orderId}`).emit('rider:location:update', {
-              orderId,
-              riderId: userId,
-              latitude,
-              longitude,
-              timestamp: Date.now(),
-            })
-          }
+          // Broadcast to every order this rider is serving (customer tracking)
+          await broadcastRiderLocation(userId, {
+            latitude,
+            longitude,
+            heading: Number.isFinite(Number(data?.heading)) ? Number(data.heading) : null,
+            speed: Number.isFinite(Number(data?.speed)) ? Number(data.speed) : null,
+          }, io)
 
           // Broadcast to the admin dashboard ONLY. This used to target the
           // `riders:online` room, which every rider socket joins — so each

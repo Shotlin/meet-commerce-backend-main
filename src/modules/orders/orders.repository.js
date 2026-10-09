@@ -176,6 +176,68 @@ export class OrdersRepository {
     return rows[0]?.delivery_otp || null
   }
 
+  /**
+   * Live-tracking snapshot for the customer map: the rider currently holding
+   * the order (accepted / picked up / in transit), the rider's last known
+   * position, the pickup store and the delivery destination. `phase` tells
+   * the client what the rider is doing right now — heading to the store
+   * (`TO_STORE`) or already carrying the order to the customer
+   * (`TO_CUSTOMER`). Null when no rider holds the order yet.
+   */
+  async getTrackingSnapshot(orderId) {
+    const { rows } = await query(
+      `SELECT da.status AS assignment_status,
+              da.rider_id, ru.name AS rider_name, ru.phone AS rider_phone,
+              rp.current_lat, rp.current_lng, rp.location_updated_at,
+              rp.vehicle_number,
+              s.name AS shop_name, s.lat AS shop_lat, s.lng AS shop_lng,
+              o.delivery_address
+         FROM delivery_assignments da
+         JOIN orders o ON o.id = da.order_id
+         JOIN users ru ON ru.id = da.rider_id
+         LEFT JOIN rider_profiles rp ON rp.user_id = da.rider_id
+         LEFT JOIN shops s ON s.id = o.shop_id
+        WHERE da.order_id = $1
+          AND da.status IN ('ACCEPTED', 'PICKED_UP', 'IN_TRANSIT')
+        ORDER BY da.assigned_at DESC NULLS LAST
+        LIMIT 1`,
+      [orderId]
+    )
+    const r = rows[0]
+    if (!r) return null
+    const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v))
+    const addr = typeof r.delivery_address === 'string'
+      ? JSON.parse(r.delivery_address || '{}')
+      : (r.delivery_address || {})
+    const destLat = num(addr.lat ?? addr.latitude)
+    const destLng = num(addr.lng ?? addr.longitude)
+    const riderLat = num(r.current_lat)
+    const riderLng = num(r.current_lng)
+    const shopLat = num(r.shop_lat)
+    const shopLng = num(r.shop_lng)
+    const finite = (v) => v !== null && Number.isFinite(v)
+    return {
+      phase: r.assignment_status === 'ACCEPTED' ? 'TO_STORE' : 'TO_CUSTOMER',
+      rider: {
+        id: r.rider_id,
+        name: r.rider_name || 'Delivery partner',
+        phone: r.rider_phone || '',
+        vehicleNumber: r.vehicle_number || null,
+      },
+      riderLocation: finite(riderLat) && finite(riderLng)
+        ? {
+            lat: riderLat,
+            lng: riderLng,
+            updatedAt: r.location_updated_at ? new Date(r.location_updated_at).toISOString() : null,
+          }
+        : null,
+      store: finite(shopLat) && finite(shopLng)
+        ? { name: r.shop_name || 'Store', lat: shopLat, lng: shopLng }
+        : null,
+      destination: finite(destLat) && finite(destLng) ? { lat: destLat, lng: destLng } : null,
+    }
+  }
+
   async getOrderItems(orderId) {
     const { rows } = await query(
       `SELECT * FROM order_items WHERE order_id = $1 ORDER BY created_at`,
