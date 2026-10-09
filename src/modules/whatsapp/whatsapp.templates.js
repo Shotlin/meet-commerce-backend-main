@@ -177,6 +177,12 @@ export function tidyMessage(text) {
     .trim()
 }
 
+/** "1.00" → "1", "0.50" → "0.5" (quantities arrive as decimals from Postgres). */
+export function formatQty(q) {
+  const n = Number(q)
+  return Number.isFinite(n) ? String(Number(n.toFixed(2))) : String(q)
+}
+
 /** Formats the item list in one of several natural styles. */
 export function formatItems(items, rng = Math.random, max = 6) {
   const list = (items || []).filter((i) => i && i.name)
@@ -186,11 +192,11 @@ export function formatItems(items, rng = Math.random, max = 6) {
   const style = Math.floor(rng() * 3)
   let text
   if (style === 0) {
-    text = shown.map((i) => `• ${i.quantity} × ${i.name}`).join('\n')
+    text = shown.map((i) => `• ${formatQty(i.quantity)} × ${i.name}`).join('\n')
   } else if (style === 1) {
-    text = shown.map((i, n) => `${n + 1}. ${i.name} (x${i.quantity})`).join('\n')
+    text = shown.map((i, n) => `${n + 1}. ${i.name} (x${formatQty(i.quantity)})`).join('\n')
   } else {
-    text = shown.map((i) => `${i.name} ×${i.quantity}`).join(', ')
+    text = shown.map((i) => `${i.name} ×${formatQty(i.quantity)}`).join(', ')
   }
   return extra > 0 ? `${text}${style === 2 ? ' ' : '\n'}+${extra} more` : text
 }

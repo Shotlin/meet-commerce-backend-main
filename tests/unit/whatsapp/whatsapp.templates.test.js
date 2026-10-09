@@ -6,6 +6,7 @@ import {
   renderMessage,
   formatItems,
   countCombinations,
+  formatQty,
   WHATSAPP_EVENTS,
   getSampleVars,
 } from '../../../src/modules/whatsapp/whatsapp.templates.js'
@@ -69,6 +70,11 @@ describe('rendering', () => {
 })
 
 describe('formatItems', () => {
+  it('prints whole quantities without decimals', () => {
+    expect(formatQty('1.00')).toBe('1')
+    expect(formatQty('0.50')).toBe('0.5')
+    expect(formatItems([{ name: 'Eggs', quantity: '2.00' }], () => 0)).toBe('• 2 × Eggs')
+  })
   it('caps the list and reports the remainder', () => {
     const items = Array.from({ length: 9 }, (_, i) => ({ name: `P${i}`, quantity: 1 }))
     expect(formatItems(items, () => 0)).toContain('+3 more')
