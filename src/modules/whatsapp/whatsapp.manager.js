@@ -21,6 +21,16 @@ const MAX_INCOMING_MEDIA_BYTES = 16 * 1024 * 1024
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+/** pn | lid | group | broadcast | other — for logs that must not contain numbers. */
+export function jidKind(jid) {
+  const j = String(jid || '')
+  if (j.endsWith('@s.whatsapp.net')) return 'pn'
+  if (j.endsWith('@lid')) return 'lid'
+  if (j.endsWith('@g.us')) return 'group'
+  if (j.includes('broadcast')) return 'broadcast'
+  return 'other'
+}
+
 export function phoneFromJid(jid) {
   if (!jid) return null
   const digits = String(jid).split('@')[0].split(':')[0].replace(/\D/g, '')
@@ -191,8 +201,23 @@ export class WhatsAppManager extends EventEmitter {
       })
 
       sock.ev.on('messages.upsert', ({ messages, type }) => {
-        if (type !== 'notify') return
-        for (const m of messages || []) this._handleIncoming(m)
+        // Diagnostics only — shape, never numbers or text.
+        log.info({
+          wa: 'upsert', type, count: messages?.length,
+          items: (messages || []).slice(0, 5).map((m) => ({
+            fromMe: !!m.key?.fromMe,
+            remote: jidKind(m.key?.remoteJid),
+            hasContent: !!m.message,
+            stub: m.messageStubType ?? null,
+            kind: m.message ? Object.keys(m.message)[0] : null,
+          })),
+        }, 'WhatsApp messages.upsert')
+        for (const m of messages || []) {
+          // 'append' = history / sent-from-phone. Accept it only when it is fresh,
+          // so a history dump can never flood the inbox.
+          const fresh = Date.now() - Number(m.messageTimestamp || 0) * 1000 < 5 * 60 * 1000
+          if (type === 'notify' || (type === 'append' && fresh)) this._handleIncoming(m)
+        }
       })
     } catch (err) {
       this.state = 'ERROR'
@@ -225,7 +250,10 @@ export class WhatsAppManager extends EventEmitter {
 
   async _processIncoming(message) {
     const remote = message.key?.remoteJid
-    if (!remote || remote.endsWith('@g.us') || remote.includes('broadcast') || remote.endsWith('@newsletter')) return
+    if (!remote || remote.endsWith('@g.us') || remote.includes('broadcast') || remote.endsWith('@newsletter')) {
+      log.info({ wa: 'drop', reason: 'group/broadcast/none' }, 'WhatsApp message ignored')
+      return
+    }
 
     const fromMe = !!message.key.fromMe
     const jid = [message.key.remoteJidAlt, message.key.senderPn, remote]
@@ -234,7 +262,10 @@ export class WhatsAppManager extends EventEmitter {
 
     let m = message.message
     m = m?.ephemeralMessage?.message || m?.viewOnceMessage?.message || m?.viewOnceMessageV2?.message || m
-    if (!m) return
+    if (!m) {
+      log.warn({ wa: 'drop', reason: 'no content (not decrypted yet?)', stub: message.messageStubType ?? null }, 'WhatsApp message has no content')
+      return
+    }
 
     const text = m.conversation || m.extendedTextMessage?.text || ''
     if (!fromMe && /^\s*(stop|unsubscribe|cancel messages?)\s*$/i.test(text) && phone) {
@@ -273,6 +304,7 @@ export class WhatsAppManager extends EventEmitter {
         }
       }
     } else if (!text) {
+      log.info({ wa: 'drop', reason: 'not a chat message', kind: Object.keys(m)[0] }, 'WhatsApp message ignored')
       return // reactions, polls, protocol messages…
     }
 

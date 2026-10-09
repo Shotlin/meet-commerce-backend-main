@@ -82,6 +82,7 @@ export class WhatsAppChatService {
       expiresAt: computeExpiry(at, days),
       preview: messagePreview(args.type || 'text', args.body),
     })
+    log.info({ wa: 'stored', direction: args.direction, type: args.type, duplicate: !!result.duplicate }, 'WhatsApp chat message saved')
     if (!result.duplicate) await this._notifyDashboard(result.conversation.id)
     return result
   }
