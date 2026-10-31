@@ -1,7 +1,15 @@
 import { ProductsController } from "./products.controller.js";
 import { ProductsService } from "./products.service.js";
 import { ProductsRepository } from "./products.repository.js";
+import { ProductBulkImportController } from "./product-bulk-import.controller.js";
+import { ProductBulkImportService } from "./product-bulk-import.service.js";
+import {
+  BulkImportCommitQuerySchema,
+  BulkImportPreviewQuerySchema,
+  BulkImportTemplateQuerySchema,
+} from "./product-bulk-import.schema.js";
 import { importProductsFromCSV } from "../../utils/csvImporter.js";
+import { requireShopScope } from "../../middlewares/shop-scope.js";
 import { success, error } from "../../utils/apiResponse.js";
 import {
   listProductsSchema,
@@ -29,6 +37,9 @@ export default async function productRoutes(fastify) {
   const repository = new ProductsRepository();
   const service = new ProductsService(repository);
   const controller = new ProductsController(service);
+  const bulkImportController = new ProductBulkImportController(
+    new ProductBulkImportService()
+  );
 
   /**
    * Best-effort JWT verification: if a token is present and valid the
@@ -299,7 +310,59 @@ export default async function productRoutes(fastify) {
     controller.delete.bind(controller),
   );
 
-  // POST /bulk-import — CSV bulk import [ADMIN]
+  // GET /bulk-import/template — XLSX/CSV import template [ADMIN]
+  fastify.get(
+    "/bulk-import/template",
+    {
+      schema: {
+        tags: ["Products"],
+        summary: "Download product bulk-import template",
+        querystring: BulkImportTemplateQuerySchema,
+      },
+      preHandler: [fastify.authenticate, fastify.authorize(["ADMIN"])],
+    },
+    bulkImportController.downloadTemplate
+  );
+
+  // POST /bulk-import/preview — parse + validate a CSV/XLSX without writing [ADMIN]
+  fastify.post(
+    "/bulk-import/preview",
+    {
+      schema: {
+        tags: ["Products"],
+        summary: "Preview a store product bulk import",
+        consumes: ["multipart/form-data"],
+        querystring: BulkImportPreviewQuerySchema,
+      },
+      preHandler: [
+        fastify.authenticate,
+        fastify.authorize(["ADMIN"]),
+        requireShopScope(),
+      ],
+    },
+    bulkImportController.preview
+  );
+
+  // POST /bulk-import/commit — create master products and attach them to the store [ADMIN]
+  fastify.post(
+    "/bulk-import/commit",
+    {
+      schema: {
+        tags: ["Products"],
+        summary: "Commit a store product bulk import",
+        consumes: ["multipart/form-data"],
+        querystring: BulkImportCommitQuerySchema,
+      },
+      preHandler: [
+        fastify.authenticate,
+        fastify.authorize(["ADMIN"]),
+        requireShopScope(),
+      ],
+    },
+    bulkImportController.commit
+  );
+
+  // POST /bulk-import — legacy master-only CSV import [ADMIN]
   fastify.post(
     "/bulk-import",
     {

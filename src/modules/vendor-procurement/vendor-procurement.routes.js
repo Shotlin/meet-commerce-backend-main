@@ -26,6 +26,9 @@ import {
   EligibleVendorPreviewSchema,
   ReceiveSupplySchema,
   SubmitReviewSchema,
+  CreateInHouseSupplySchema,
+  AttachInHouseEvidenceSchema,
+  ListSupplyOrdersQuerySchema,
 } from './vendor-procurement.schema.js'
 import { requireShopScope } from '../../middlewares/shop-scope.js'
 import { requirePermission } from '../../middlewares/permission-check.js'
@@ -111,9 +114,17 @@ export async function vendorProcurementRoutes(fastify) {
     handler: controller.getEligibleVendorPreview,
   })
 
+  // 11b. Record an in-house purchase (no vendor, no request)
+  fastify.post('/in-house-supplies', {
+    preHandler: [fastify.authenticate, requirePermission('procurement.create'), requireShopScope()],
+    schema: { body: CreateInHouseSupplySchema },
+    handler: controller.createInHouseSupply,
+  })
+
   // 12. Supply orders list (tracking)
   fastify.get('/supplies', {
     preHandler: [fastify.authenticate, requirePermission('procurement.view'), requireShopScope()],
+    schema: { querystring: ListSupplyOrdersQuerySchema },
     handler: controller.listSupplyOrders,
   })
 
@@ -121,6 +132,19 @@ export async function vendorProcurementRoutes(fastify) {
   fastify.get('/supplies/:supplyId', {
     preHandler: [fastify.authenticate, requirePermission('procurement.view'), requireShopScope()],
     handler: controller.getSupplyOrder,
+  })
+
+  // 13b. Admin evidence for an in-house purchase (upload or direct link)
+  fastify.post('/supplies/:supplyId/evidence', {
+    preHandler: [fastify.authenticate, requirePermission('procurement.update'), requireShopScope()],
+    schema: { body: AttachInHouseEvidenceSchema },
+    handler: controller.attachInHouseEvidence,
+  })
+
+  // 13c. In-house arrival (Recorded -> Arrived)
+  fastify.post('/supplies/:supplyId/mark-arrived', {
+    preHandler: [fastify.authenticate, requirePermission('procurement.update'), requireShopScope()],
+    handler: controller.markInHouseArrived,
   })
 
   // 14. Mark supply delivered (store confirmation of arrival)

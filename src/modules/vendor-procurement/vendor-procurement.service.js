@@ -1078,6 +1078,7 @@ export class VendorProcurementService {
     return this.repository.listSupplyOrders({
       shopId: scopedShopId ?? queryParams?.shop_id ?? null,
       vendorId: vendorId ?? queryParams?.vendor_id ?? null,
+      sourceType: queryParams?.source_type ?? null,
       status: queryParams?.status ?? null,
       search: queryParams?.search ?? null,
       page,
@@ -1105,6 +1106,262 @@ export class VendorProcurementService {
     return this.getSupplyOrder(supplyOrderId, { vendorId })
   }
 
+  // ── In-house purchases (no vendor) ────────────────────────────
+
+  /**
+   * Records an in-house purchase as a real supply order with no vendor and
+   * no procurement request. It reuses the same items, receipt and inventory
+   * bridge as a vendor supply, but skips publish/quote/award/cleaning.
+   */
+  async createInHouseSupply(actorId, payload, { scopedShopId = null } = {}) {
+    const shopId = payload?.shop_id ?? null
+    this.assertShopAccess(scopedShopId, shopId)
+
+    const shop = await this.repository.findShopById(shopId)
+    if (!shop) {
+      throw procurementError('Shop not found', 404, 'SHOP_NOT_FOUND')
+    }
+
+    const rawItems = payload?.items ?? []
+    if (rawItems.length === 0) {
+      throw procurementError(
+        'An in-house purchase needs at least one item',
+        422,
+        'IN_HOUSE_ITEMS_REQUIRED'
+      )
+    }
+
+    const productIds = [...new Set(rawItems.map((item) => item.product_id))]
+    const products = await this.repository.findProductsByIds(productIds)
+    const productById = new Map(products.map((product) => [product.id, product]))
+
+    const items = rawItems.map((item) => {
+      const product = productById.get(item.product_id)
+      if (!product || product.deleted_at || !product.is_active) {
+        throw procurementError(
+          `Product ${item.product_id} is not an active catalog product`,
+          422,
+          'IN_HOUSE_PRODUCT_INVALID'
+        )
+      }
+      const quantity = Number(item.quantity)
+      const unitPrice = Number(item.unit_price ?? 0)
+      const unit = item.unit ?? 'KG'
+      if (!(quantity > 0)) {
+        throw procurementError(
+          `Quantity must be greater than zero for ${product.name}`,
+          422,
+          'IN_HOUSE_QUANTITY_INVALID'
+        )
+      }
+      if (!UNITS.has(unit)) {
+        throw procurementError(`Unsupported unit ${unit}`, 422, 'IN_HOUSE_UNIT_INVALID')
+      }
+      if (!(unitPrice >= 0)) {
+        throw procurementError(
+          `Unit price cannot be negative for ${product.name}`,
+          422,
+          'IN_HOUSE_PRICE_INVALID'
+        )
+      }
+      return {
+        product_id: product.id,
+        category_id: product.category_id ?? null,
+        item_name: String(item.item_name ?? '').trim().slice(0, 200) || product.name,
+        agreed_quantity: quantity,
+        unit,
+        agreed_unit_price: unitPrice,
+        agreed_line_total: Math.round(quantity * unitPrice * 100) / 100,
+      }
+    })
+
+    const awardAmount =
+      Math.round(items.reduce((sum, item) => sum + item.agreed_line_total, 0) * 100) / 100
+    const supplyNumber = `SUP-${this.dateStamp()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`
+
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const supplyOrder = await this.repository.insertSupplyOrderTx(client, {
+        supply_number: supplyNumber,
+        request_id: null,
+        vendor_id: null,
+        shop_id: shopId,
+        quote_id: null,
+        source_mode: 'IN_HOUSE',
+        source_type: 'IN_HOUSE',
+        in_house_supplier_name: payload?.in_house_supplier_name?.trim() || null,
+        status: 'ACCEPTED',
+        award_amount: awardAmount,
+        promised_delivery_at: payload?.promised_delivery_at ?? null,
+        created_by: actorId,
+      })
+      await this.repository.insertSupplyOrderItemsTx(client, supplyOrder.id, items)
+      await this.repository.insertSupplyEventTx(client, {
+        supply_order_id: supplyOrder.id,
+        from_status: null,
+        to_status: 'ACCEPTED',
+        actor_id: actorId,
+        actor_role: 'SHOP_STAFF',
+        note: 'In-house purchase recorded',
+      })
+      await emitInTx(client, 'procurement.in_house.created', {
+        actor_user_id: actorId,
+        target_type: 'procurement_supply_order',
+        target_id: supplyOrder.id,
+        after: {
+          status: 'ACCEPTED',
+          shop_id: shopId,
+          award_amount: awardAmount,
+          item_count: items.length,
+        },
+      })
+      await client.query('COMMIT')
+      logger.info({ supplyOrderId: supplyOrder.id, shopId }, 'In-house purchase recorded')
+      return this.getSupplyOrder(supplyOrder.id, { scopedShopId })
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
+  }
+
+  /**
+   * Admin-side evidence for an in-house purchase: an uploaded Cloudinary
+   * asset or a direct video URL. The evidence is auto-accepted because the
+   * admin is the one attesting to it. Vendor evidence still goes through
+   * the vendor route and stays PENDING.
+   */
+  async attachInHouseEvidence(supplyOrderId, actorId, payload, { scopedShopId = null } = {}) {
+    const supply = await this.repository.findSupplyOrderById(supplyOrderId)
+    if (!supply) {
+      throw procurementError('Supply order not found', 404, 'SUPPLY_ORDER_NOT_FOUND')
+    }
+    this.assertShopAccess(scopedShopId, supply.shop_id)
+    if (supply.source_type !== 'IN_HOUSE') {
+      throw procurementError(
+        'Admin evidence attachment is only available for in-house purchases',
+        409,
+        'ADMIN_EVIDENCE_IN_HOUSE_ONLY'
+      )
+    }
+    if (!['ACCEPTED', 'DELIVERED_PENDING_RECEIPT'].includes(supply.status)) {
+      throw procurementError(
+        'Evidence can only be attached before receipt is confirmed',
+        409,
+        'SUPPLY_NOT_EVIDENCEABLE'
+      )
+    }
+
+    const mediaUrl = String(payload?.media_url ?? '').trim()
+    try {
+      const parsed = new URL(mediaUrl)
+      if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('bad protocol')
+    } catch {
+      throw procurementError(
+        'A valid http(s) video URL is required',
+        422,
+        'INVALID_EVIDENCE_URL'
+      )
+    }
+
+    const attachmentSource =
+      payload?.attachment_source ?? (payload?.media_public_id ? 'UPLOAD' : 'EXTERNAL_LINK')
+    if (attachmentSource === 'UPLOAD' && !payload?.media_public_id) {
+      throw procurementError(
+        'An uploaded video requires its Cloudinary public id',
+        422,
+        'EVIDENCE_PUBLIC_ID_REQUIRED'
+      )
+    }
+
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const evidence = await this.repository.insertEvidence(
+        {
+          supply_order_id: supplyOrderId,
+          vendor_id: null,
+          evidence_type: payload?.evidence_type ?? 'QUALITY_VIDEO',
+          media_public_id: payload?.media_public_id ?? null,
+          media_url: mediaUrl,
+          mime_type: payload?.mime_type,
+          duration_seconds: payload?.duration_seconds,
+          size_bytes: payload?.size_bytes,
+          uploaded_by: actorId,
+          review_status: 'ACCEPTED',
+          attachment_source: attachmentSource,
+        },
+        client
+      )
+      await emitInTx(client, 'procurement.supply.evidence_attached', {
+        actor_user_id: actorId,
+        target_type: 'procurement_supply_order',
+        target_id: supplyOrderId,
+        after: {
+          evidence_id: evidence.id,
+          evidence_type: evidence.evidence_type,
+          attachment_source: attachmentSource,
+          source_type: 'IN_HOUSE',
+        },
+      })
+      await client.query('COMMIT')
+      logger.info({ supplyOrderId, evidenceId: evidence.id }, 'In-house quality evidence attached')
+      return evidence
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
+  }
+
+  async markInHouseArrived(supplyOrderId, actorId, { scopedShopId = null } = {}) {
+    const supply = await this.repository.findSupplyOrderById(supplyOrderId)
+    if (!supply) {
+      throw procurementError('Supply order not found', 404, 'SUPPLY_ORDER_NOT_FOUND')
+    }
+    this.assertShopAccess(scopedShopId, supply.shop_id)
+    if (supply.source_type !== 'IN_HOUSE') {
+      throw procurementError(
+        'Only in-house purchases can use mark-arrived',
+        409,
+        'IN_HOUSE_ONLY'
+      )
+    }
+    if (supply.status !== 'ACCEPTED') {
+      throw procurementError(
+        'Only a recorded in-house purchase can be marked arrived',
+        409,
+        'SUPPLY_NOT_ARRIVABLE'
+      )
+    }
+
+    const updated = await this.repository.updateSupplyStatus(
+      supplyOrderId,
+      'DELIVERED_PENDING_RECEIPT',
+      { delivered_at: new Date().toISOString() }
+    )
+    await this.repository.insertSupplyEvent({
+      supply_order_id: supplyOrderId,
+      from_status: 'ACCEPTED',
+      to_status: 'DELIVERED_PENDING_RECEIPT',
+      actor_id: actorId,
+      actor_role: 'SHOP_STAFF',
+      note: 'In-house purchase marked arrived',
+    })
+    await emit('procurement.supply.status_changed', {
+      actor_user_id: actorId,
+      target_type: 'procurement_supply_order',
+      target_id: supplyOrderId,
+      before: { status: 'ACCEPTED' },
+      after: { status: 'DELIVERED_PENDING_RECEIPT', source_type: 'IN_HOUSE' },
+    })
+    logger.info({ supplyOrderId }, 'In-house purchase marked arrived')
+    return updated
+  }
+
 
   // ── Supply fulfilment state machine (Big Phase 11) ────────────
 
@@ -1118,7 +1375,7 @@ export class VendorProcurementService {
     if (!supply) {
       throw procurementError('Supply order not found', 404, 'SUPPLY_ORDER_NOT_FOUND')
     }
-    if (supply.vendor_id !== vendorId) {
+    if ((supply.source_type ?? 'VENDOR') !== 'VENDOR' || !vendorId || supply.vendor_id !== vendorId) {
       throw procurementError('Supply order not found', 404, 'SUPPLY_ORDER_NOT_FOUND')
     }
 
@@ -1188,7 +1445,7 @@ export class VendorProcurementService {
     if (!supply) {
       throw procurementError('Supply order not found', 404, 'SUPPLY_ORDER_NOT_FOUND')
     }
-    if (supply.vendor_id !== vendorId) {
+    if ((supply.source_type ?? 'VENDOR') !== 'VENDOR' || !vendorId || supply.vendor_id !== vendorId) {
       throw procurementError('Supply order not found', 404, 'SUPPLY_ORDER_NOT_FOUND')
     }
     if (!['ACCEPTED', 'PROCESSING', 'CLEANING'].includes(supply.status)) {
@@ -1320,6 +1577,21 @@ export class VendorProcurementService {
       )
     }
 
+    // In-house stock has no vendor pack gate, so receipt is the point where
+    // a missing video would otherwise reach customers with no traceability.
+    if (supply.source_type === 'IN_HOUSE') {
+      const hasVideo = (supply.evidence ?? []).some(
+        (item) => item.evidence_type === 'QUALITY_VIDEO' && item.review_status !== 'REJECTED'
+      )
+      if (!hasVideo) {
+        throw procurementError(
+          'Attach a quality video before confirming an in-house receipt',
+          409,
+          'IN_HOUSE_EVIDENCE_REQUIRED'
+        )
+      }
+    }
+
     const items = payload.items ?? []
     if (items.length === 0) {
       throw procurementError('Receipt requires at least one item line', 422, 'RECEIPT_ITEMS_REQUIRED')
@@ -1386,7 +1658,7 @@ export class VendorProcurementService {
         actor_role: 'SHOP_STAFF',
         note: receiptStatus === 'RECEIVED' ? 'Receipt confirmed' : 'Rejected at receipt',
       })
-      if (receiptStatus === 'RECEIVED') {
+      if (receiptStatus === 'RECEIVED' && supply.request_id) {
         await this.repository.markRequestCompleted(supply.request_id)
       }
 
@@ -1581,6 +1853,13 @@ export class VendorProcurementService {
       throw procurementError('Supply order not found', 404, 'SUPPLY_ORDER_NOT_FOUND')
     }
     this.assertShopAccess(scopedShopId, supply.shop_id)
+    if (supply.source_type === 'IN_HOUSE') {
+      throw procurementError(
+        'In-house purchases do not have a vendor review',
+        409,
+        'IN_HOUSE_REVIEW_NOT_APPLICABLE'
+      )
+    }
     if (!['RECEIVED', 'CLOSED'].includes(supply.status)) {
       throw procurementError(
         'Supplies can only be rated after receipt is confirmed',

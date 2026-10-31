@@ -202,6 +202,69 @@ export const AttachEvidenceSchema = {
   additionalProperties: false,
 }
 
+export const CreateInHouseSupplySchema = {
+  type: 'object',
+  required: ['shop_id', 'items'],
+  properties: {
+    shop_id: UUID_PATTERN,
+    in_house_supplier_name: { type: 'string', maxLength: 200 },
+    promised_delivery_at: { type: 'string' },
+    items: {
+      type: 'array',
+      minItems: 1,
+      items: {
+        type: 'object',
+        required: ['product_id', 'quantity', 'unit', 'unit_price'],
+        properties: {
+          product_id: UUID_PATTERN,
+          item_name: { type: 'string', minLength: 1, maxLength: 200 },
+          quantity: { type: 'number', exclusiveMinimum: 0 },
+          unit: { type: 'string', enum: ['KG', 'PC', 'PACK', 'LTR'], default: 'KG' },
+          unit_price: { type: 'number', minimum: 0 },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  additionalProperties: false,
+}
+
+export const AttachInHouseEvidenceSchema = {
+  type: 'object',
+  required: ['media_url'],
+  properties: {
+    evidence_type: { type: 'string', enum: ['QUALITY_VIDEO', 'QUALITY_IMAGE', 'PACKING_IMAGE', 'DISPATCH_PROOF', 'OTHER'] },
+    media_public_id: { type: 'string', maxLength: 255 },
+    media_url: { type: 'string', minLength: 1, maxLength: 512 },
+    mime_type: { type: 'string', maxLength: 100 },
+    duration_seconds: { type: 'integer', exclusiveMinimum: 0 },
+    size_bytes: { type: 'integer', minimum: 0 },
+    attachment_source: { type: 'string', enum: ['UPLOAD', 'EXTERNAL_LINK'] },
+  },
+  additionalProperties: false,
+}
+
+export const ListSupplyOrdersQuerySchema = {
+  type: 'object',
+  properties: {
+    shop_id: UUID_PATTERN,
+    vendor_id: UUID_PATTERN,
+    source_type: { type: 'string', enum: ['VENDOR', 'IN_HOUSE'] },
+    status: {
+      type: 'string',
+      enum: [
+        'AWARDED', 'ACCEPTED', 'PROCESSING', 'CLEANING', 'VIDEO_SUBMITTED',
+        'PACKED', 'READY_FOR_DISPATCH', 'DISPATCHED', 'DELIVERED_PENDING_RECEIPT',
+        'RECEIVED', 'CLOSED', 'CANCELLED', 'REJECTED_AT_RECEIPT',
+      ],
+    },
+    search: { type: 'string', maxLength: 200 },
+    page: { type: 'integer', minimum: 1, default: 1 },
+    limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+  },
+  additionalProperties: false,
+}
+
 export const ReceiveSupplySchema = {
   type: 'object',
   required: ['items'],

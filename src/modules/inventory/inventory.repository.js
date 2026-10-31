@@ -274,7 +274,7 @@ export class InventoryRepository {
          so.id AS supply_order_id,
          so.supply_number,
          v.id AS vendor_id,
-         v.name AS vendor_name,
+         COALESCE(v.name, 'FreshCuts In-house') AS vendor_name,
          e.id AS evidence_id,
          e.media_url AS video_url,
          e.review_status AS evidence_review_status,
@@ -283,7 +283,7 @@ export class InventoryRepository {
        JOIN procurement_receipt_items pri ON pri.inventory_lot_id = a.inventory_lot_id
        JOIN procurement_receipts pr ON pr.id = pri.receipt_id
        JOIN procurement_supply_orders so ON so.id = pr.supply_order_id
-       JOIN vendors v ON v.id = so.vendor_id
+       LEFT JOIN vendors v ON v.id = so.vendor_id
        LEFT JOIN procurement_evidence e
          ON e.supply_order_id = so.id
         AND e.evidence_type = 'QUALITY_VIDEO'
@@ -329,7 +329,11 @@ export class InventoryRepository {
       `SELECT l.*, p.name AS product_name, w.name AS warehouse_name, w.code AS warehouse_code,
               so.id AS supply_order_id, so.supply_number,
               COALESCE(v.id, NULL) AS vendor_id,
-              COALESCE(v.name, l.manual_vendor_name) AS vendor_name,
+              COALESCE(
+                v.name,
+                l.manual_vendor_name,
+                CASE WHEN so.source_type = 'IN_HOUSE' THEN 'FreshCuts In-house' END
+              ) AS vendor_name,
               COALESCE(
                 (SELECT e.media_url FROM procurement_evidence e
                   WHERE e.supply_order_id = so.id AND e.evidence_type = 'QUALITY_VIDEO'

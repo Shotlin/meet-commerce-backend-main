@@ -503,16 +503,19 @@ export class VendorProcurementRepository {
     const { rows } = await client.query(
       `INSERT INTO procurement_supply_orders
          (supply_number, request_id, vendor_id, shop_id, quote_id, source_mode,
-          status, award_amount, promised_delivery_at, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          source_type, in_house_supplier_name, status, award_amount,
+          promised_delivery_at, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
       [
         supplyData.supply_number,
-        supplyData.request_id,
-        supplyData.vendor_id,
+        supplyData.request_id ?? null,
+        supplyData.vendor_id ?? null,
         supplyData.shop_id,
         supplyData.quote_id ?? null,
         supplyData.source_mode,
+        supplyData.source_type ?? 'VENDOR',
+        supplyData.in_house_supplier_name ?? null,
         supplyData.status ?? 'AWARDED',
         supplyData.award_amount,
         supplyData.promised_delivery_at ?? null,
@@ -520,6 +523,23 @@ export class VendorProcurementRepository {
       ]
     )
     return rows[0]
+  }
+
+  /**
+   * Product lookup for an in-house purchase line. Deliberately narrow: an
+   * in-house order is tied to a real catalog SKU exactly like a vendor
+   * request line, so the receipt can later bridge into inventory without a
+   * second manual product pick at goods-in time.
+   */
+  async findProductsByIds(productIds) {
+    if (!productIds || productIds.length === 0) return []
+    const { rows } = await query(
+      `SELECT id, name, category_id, is_active, deleted_at
+         FROM products
+        WHERE id = ANY($1::uuid[])`,
+      [productIds]
+    )
+    return rows
   }
 
   async insertSupplyOrderItemsTx(client, supplyOrderId, items) {
@@ -558,7 +578,8 @@ export class VendorProcurementRepository {
               dispatch_note = COALESCE($4, dispatch_note),
               vehicle_note = COALESCE($5, vehicle_note),
               dispatched_at = COALESCE($6, dispatched_at),
-              closed_at = COALESCE($7, closed_at)
+              closed_at = COALESCE($7, closed_at),
+              delivered_at = COALESCE($8, delivered_at)
         WHERE id = $1 AND deleted_at IS NULL
         RETURNING *`,
       [
@@ -569,6 +590,7 @@ export class VendorProcurementRepository {
         extra.vehicle_note ?? null,
         extra.dispatched_at ?? null,
         extra.closed_at ?? null,
+        extra.delivered_at ?? null,
       ]
     )
     return rows[0] ?? null
@@ -576,25 +598,30 @@ export class VendorProcurementRepository {
 
   /**
    * Persists quality-evidence metadata for a supply order (Big Phase 12).
+   * Accepts an optional transaction client so a caller that also writes an
+   * audit row can keep both writes atomic.
    */
-  async insertEvidence(evidenceData) {
-    const { rows } = await query(
+  async insertEvidence(evidenceData, client = null) {
+    const executor = client ?? { query }
+    const { rows } = await executor.query(
       `INSERT INTO procurement_evidence
          (supply_order_id, vendor_id, evidence_type, media_public_id, media_url,
-          mime_type, duration_seconds, size_bytes, uploaded_by, review_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          mime_type, duration_seconds, size_bytes, uploaded_by, review_status,
+          attachment_source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [
         evidenceData.supply_order_id,
-        evidenceData.vendor_id,
+        evidenceData.vendor_id ?? null,
         evidenceData.evidence_type ?? 'QUALITY_VIDEO',
-        evidenceData.media_public_id,
+        evidenceData.media_public_id ?? null,
         evidenceData.media_url,
         evidenceData.mime_type ?? null,
         evidenceData.duration_seconds ?? null,
         evidenceData.size_bytes ?? null,
         evidenceData.uploaded_by ?? null,
         evidenceData.review_status ?? 'PENDING',
+        evidenceData.attachment_source ?? 'UPLOAD',
       ]
     )
     return rows[0]
@@ -1114,7 +1141,7 @@ export class VendorProcurementRepository {
 
   // ── Supply order reads (Big Phase 8 tracking surface) ─────────
 
-  async listSupplyOrders({ shopId = null, vendorId = null, status = null, search = null, page = 1, limit = 20 }) {
+  async listSupplyOrders({ shopId = null, vendorId = null, sourceType = null, status = null, search = null, page = 1, limit = 20 }) {
     const conditions = ['so.deleted_at IS NULL']
     const params = []
     if (shopId) {
@@ -1125,21 +1152,27 @@ export class VendorProcurementRepository {
       params.push(vendorId)
       conditions.push(`so.vendor_id = $${params.length}`)
     }
+    if (sourceType) {
+      params.push(sourceType)
+      conditions.push(`so.source_type = $${params.length}`)
+    }
     if (status) {
       params.push(status)
       conditions.push(`so.status = $${params.length}`)
     }
     if (search) {
       params.push(`%${search}%`)
-      conditions.push(`(so.supply_number ILIKE $${params.length} OR r.request_number ILIKE $${params.length} OR v.name ILIKE $${params.length})`)
+      conditions.push(
+        `(so.supply_number ILIKE $${params.length} OR COALESCE(r.request_number, '') ILIKE $${params.length} OR COALESCE(v.name, so.in_house_supplier_name, '') ILIKE $${params.length})`
+      )
     }
     const where = conditions.join(' AND ')
 
     const countResult = await query(
       `SELECT COUNT(*)::int AS total
          FROM procurement_supply_orders so
-         JOIN procurement_requests r ON r.id = so.request_id
-         JOIN vendors v ON v.id = so.vendor_id
+         LEFT JOIN procurement_requests r ON r.id = so.request_id
+         LEFT JOIN vendors v ON v.id = so.vendor_id
         WHERE ${where}`,
       params
     )
@@ -1149,14 +1182,17 @@ export class VendorProcurementRepository {
     const offsetIndex = params.length
     const { rows } = await query(
       `SELECT so.id, so.supply_number, so.request_id, so.vendor_id, so.shop_id, so.source_mode,
+              so.source_type, so.in_house_supplier_name,
               so.status, so.award_amount, so.promised_delivery_at, so.dispatched_at, so.received_at,
-              so.created_at, r.request_number, v.name AS vendor_name, s.name AS shop_name, s.city AS shop_city,
+              so.created_at, r.request_number, v.name AS vendor_name,
+              COALESCE(v.name, so.in_house_supplier_name) AS supplier_name,
+              s.name AS shop_name, s.city AS shop_city,
               (SELECT jsonb_agg(jsonb_build_object('item_name', i.item_name, 'agreed_quantity', i.agreed_quantity, 'unit', i.unit))
                  FROM procurement_supply_order_items i WHERE i.supply_order_id = so.id) AS item_summary,
               EXISTS (SELECT 1 FROM procurement_evidence e WHERE e.supply_order_id = so.id AND e.evidence_type = 'QUALITY_VIDEO') AS has_evidence
          FROM procurement_supply_orders so
-         JOIN procurement_requests r ON r.id = so.request_id
-         JOIN vendors v ON v.id = so.vendor_id
+         LEFT JOIN procurement_requests r ON r.id = so.request_id
+         LEFT JOIN vendors v ON v.id = so.vendor_id
          JOIN shops s ON s.id = so.shop_id
         WHERE ${where}
         ORDER BY so.created_at DESC
@@ -1185,10 +1221,11 @@ export class VendorProcurementRepository {
     const { rows } = await query(
       `SELECT so.*, r.request_number, r.title AS request_title, r.quality_instructions,
               v.name AS vendor_name, v.phone AS vendor_phone, v.email AS vendor_email,
+              COALESCE(v.name, so.in_house_supplier_name) AS supplier_name,
               s.name AS shop_name, s.city AS shop_city, s.pincode AS shop_pincode
          FROM procurement_supply_orders so
-         JOIN procurement_requests r ON r.id = so.request_id
-         JOIN vendors v ON v.id = so.vendor_id
+         LEFT JOIN procurement_requests r ON r.id = so.request_id
+         LEFT JOIN vendors v ON v.id = so.vendor_id
          JOIN shops s ON s.id = so.shop_id
         WHERE so.id = $1 AND so.deleted_at IS NULL
         LIMIT 1`,

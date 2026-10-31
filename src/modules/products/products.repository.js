@@ -1204,8 +1204,9 @@ export class ProductsRepository {
   /**
    * Create a new product
    */
-  async create(data) {
-    const { rows } = await query(
+  async create(data, client = null) {
+    const executor = client ?? { query }
+    const { rows } = await executor.query(
       `INSERT INTO products
         (name, slug, description, price, sale_price, cost_price, wholesale_price,
          category_id, stock_quantity, unit, thumbnail_url, images, tags,

@@ -239,6 +239,32 @@ export class VendorProcurementController {
     })
   }
 
+  createInHouseSupply = async (req, reply) => {
+    const actorId = req.userId ?? req.user?.id
+    const result = await this.service.createInHouseSupply(actorId, req.body, {
+      scopedShopId: req.shopId ?? null,
+    })
+    return reply.status(201).send({ success: true, data: result })
+  }
+
+  attachInHouseEvidence = async (req, reply) => {
+    const { supplyId } = req.params
+    const actorId = req.userId ?? req.user?.id
+    const result = await this.service.attachInHouseEvidence(supplyId, actorId, req.body, {
+      scopedShopId: req.shopId ?? null,
+    })
+    return reply.status(201).send({ success: true, data: result })
+  }
+
+  markInHouseArrived = async (req, reply) => {
+    const { supplyId } = req.params
+    const actorId = req.userId ?? req.user?.id
+    const result = await this.service.markInHouseArrived(supplyId, actorId, {
+      scopedShopId: req.shopId ?? null,
+    })
+    return reply.status(200).send({ success: true, data: result })
+  }
+
   markDelivered = async (req, reply) => {
     const { supplyId } = req.params
     const actorId = req.userId ?? req.user?.id
