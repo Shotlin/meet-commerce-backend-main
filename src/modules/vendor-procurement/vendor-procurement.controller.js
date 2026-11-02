@@ -243,6 +243,7 @@ export class VendorProcurementController {
     const actorId = req.userId ?? req.user?.id
     const result = await this.service.createInHouseSupply(actorId, req.body, {
       scopedShopId: req.shopId ?? null,
+      actorRole: req.user?.platform_role ?? undefined,
     })
     return reply.status(201).send({ success: true, data: result })
   }
@@ -261,6 +262,7 @@ export class VendorProcurementController {
     const actorId = req.userId ?? req.user?.id
     const result = await this.service.markInHouseArrived(supplyId, actorId, {
       scopedShopId: req.shopId ?? null,
+      actorRole: req.user?.platform_role ?? undefined,
     })
     return reply.status(200).send({ success: true, data: result })
   }
@@ -268,7 +270,7 @@ export class VendorProcurementController {
   markDelivered = async (req, reply) => {
     const { supplyId } = req.params
     const actorId = req.userId ?? req.user?.id
-    const result = await this.service.markDelivered(supplyId, actorId, { scopedShopId: req.shopId ?? null })
+    const result = await this.service.markDelivered(supplyId, actorId, { scopedShopId: req.shopId ?? null, actorRole: req.user?.platform_role ?? undefined })
     return reply.status(200).send({ success: true, data: result })
   }
 
@@ -277,6 +279,7 @@ export class VendorProcurementController {
     const actorId = req.userId ?? req.user?.id
     const result = await this.service.receiveSupply(supplyId, actorId, req.body, {
       scopedShopId: req.shopId ?? null,
+      actorRole: req.user?.platform_role ?? undefined,
     })
     return reply.status(200).send({ success: true, data: result })
   }

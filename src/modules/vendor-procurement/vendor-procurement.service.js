@@ -1113,7 +1113,7 @@ export class VendorProcurementService {
    * no procurement request. It reuses the same items, receipt and inventory
    * bridge as a vendor supply, but skips publish/quote/award/cleaning.
    */
-  async createInHouseSupply(actorId, payload, { scopedShopId = null } = {}) {
+  async createInHouseSupply(actorId, payload, { scopedShopId = null, actorRole = 'SHOP_STAFF' } = {}) {
     const shopId = payload?.shop_id ?? null
     this.assertShopAccess(scopedShopId, shopId)
 
@@ -1202,7 +1202,7 @@ export class VendorProcurementService {
         from_status: null,
         to_status: 'ACCEPTED',
         actor_id: actorId,
-        actor_role: 'SHOP_STAFF',
+        actor_role: actorRole,
         note: 'In-house purchase recorded',
       })
       await emitInTx(client, 'procurement.in_house.created', {
@@ -1317,7 +1317,7 @@ export class VendorProcurementService {
     }
   }
 
-  async markInHouseArrived(supplyOrderId, actorId, { scopedShopId = null } = {}) {
+  async markInHouseArrived(supplyOrderId, actorId, { scopedShopId = null, actorRole = 'SHOP_STAFF' } = {}) {
     const supply = await this.repository.findSupplyOrderById(supplyOrderId)
     if (!supply) {
       throw procurementError('Supply order not found', 404, 'SUPPLY_ORDER_NOT_FOUND')
@@ -1348,7 +1348,7 @@ export class VendorProcurementService {
       from_status: 'ACCEPTED',
       to_status: 'DELIVERED_PENDING_RECEIPT',
       actor_id: actorId,
-      actor_role: 'SHOP_STAFF',
+      actor_role: actorRole,
       note: 'In-house purchase marked arrived',
     })
     await emit('procurement.supply.status_changed', {
@@ -1522,7 +1522,7 @@ export class VendorProcurementService {
 
   // ── Store receipt + inventory bridge (Big Phase 13) ───────────
 
-  async markDelivered(supplyOrderId, actorId, { scopedShopId = null } = {}) {
+  async markDelivered(supplyOrderId, actorId, { scopedShopId = null, actorRole = 'SHOP_STAFF' } = {}) {
     const supply = await this.repository.findSupplyOrderById(supplyOrderId)
     if (!supply) {
       throw procurementError('Supply order not found', 404, 'SUPPLY_ORDER_NOT_FOUND')
@@ -1538,7 +1538,7 @@ export class VendorProcurementService {
       from_status: supply.status,
       to_status: 'DELIVERED_PENDING_RECEIPT',
       actor_id: actorId,
-      actor_role: 'SHOP_STAFF',
+      actor_role: actorRole,
       note: 'Store marked delivery received pending receipt',
     })
     return updated
@@ -1563,7 +1563,7 @@ export class VendorProcurementService {
    * with an explicit flag. Physical receipt is the source of truth — an
    * inventory failure never rolls back the receipt.
    */
-  async receiveSupply(supplyOrderId, actorId, payload, { scopedShopId = null } = {}) {
+  async receiveSupply(supplyOrderId, actorId, payload, { scopedShopId = null, actorRole = 'SHOP_STAFF' } = {}) {
     const supply = await this.repository.findSupplyOrderById(supplyOrderId)
     if (!supply) {
       throw procurementError('Supply order not found', 404, 'SUPPLY_ORDER_NOT_FOUND')
@@ -1655,7 +1655,7 @@ export class VendorProcurementService {
         from_status: 'DELIVERED_PENDING_RECEIPT',
         to_status: receiptStatus,
         actor_id: actorId,
-        actor_role: 'SHOP_STAFF',
+        actor_role: actorRole,
         note: receiptStatus === 'RECEIVED' ? 'Receipt confirmed' : 'Rejected at receipt',
       })
       if (receiptStatus === 'RECEIVED' && supply.request_id) {
